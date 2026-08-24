@@ -1,0 +1,43 @@
+{
+  "bookSourceName": "本地测试站",
+  "bookSourceGroup": "测试",
+  "bookSourceUrl": "http://127.0.0.1:8901",
+  "bookSourceType": 0,
+  "enabled": true,
+  "enabledExplore": true,
+  "header": "{\"User-Agent\":\"Mozilla/5.0 ViewTest\"}",
+  "searchUrl": "http://127.0.0.1:8901/search.html?q={{key}}&p={{page}}",
+  "ruleSearch": {
+    "checkKeyWord": "",
+    "bookList": "class.result-list@class.book-item",
+    "name": "class.bk-name@tag.a@text",
+    "author": "class.bk-author@text##作者：",
+    "kind": "class.bk-kind@text",
+    "intro": "class.bk-intro@text",
+    "coverUrl": "class.bk-cover@src",
+    "lastChapter": "class.bk-last@text",
+    "bookUrl": "class.bk-name@tag.a@href"
+  },
+  "ruleBookInfo": {
+    "name": "class.info-name@text",
+    "author": "class.info-author@text",
+    "kind": "class.info-kind@text",
+    "intro": "class.info-intro@text",
+    "coverUrl": "class.info-cover@src",
+    "lastChapter": "class.info-last@text",
+    "tocUrl": "class.info-toc@href"
+  },
+  "ruleToc": {
+    "chapterList": "class.chapter-list@tag.li",
+    "chapterName": "tag.a@text",
+    "chapterUrl": "tag.a@href",
+    "nextTocUrl": "class.pages@tag.a.next@href"
+  },
+  "ruleContent": {
+    "content": "id.content@html",
+    "nextContentUrl": "tag.a.next-page@href"
+  },
+  "lastUpdateTime": 1700000000000,
+  "customOrder": 0,
+  "weight": 0
+}

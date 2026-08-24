@@ -1,0 +1,629 @@
+"""Web-book pipeline: search / book info / toc / content on top of AnalyzeRule.
+
+Mirrors model/webBook/{BookList,BookInfo,BookChapterList,BookContent}.kt.
+"""
+from __future__ import annotations
+
+import asyncio
+import html as html_mod
+import json
+import re
+from typing import Any
+
+from .analyze_rule import AnalyzeRule
+from .analyze_url import AnalyzeUrl, get_absolute_url
+from .exceptions import FetchError, RuleError
+from .net import StrResponse, fetch
+
+
+def _as_dict(value: Any) -> dict:
+    """Rule objects may be dicts or JSON strings (double-parse)."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            obj = json.loads(value)
+            return obj if isinstance(obj, dict) else {}
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
+
+
+def _settings():
+    from app.core.config import settings
+
+    return settings
+
+
+async def fetch_str(analyze_url: AnalyzeUrl) -> StrResponse:
+    spec = analyze_url.spec()
+    resp = await fetch(
+        spec.url,
+        method=spec.method,
+        headers=spec.headers,
+        body=spec.body,
+        charset=spec.charset,
+        retries=spec.retry,
+    )
+    if spec.web_view:
+        resp.error = resp.error or "该 URL 需要 webView 渲染，服务端暂不支持"
+    if spec.body_js and resp.error is None:
+        from .js_bridge import eval_js
+
+        ev = eval_js(
+            spec.body_js,
+            {"result": resp.body, "baseUrl": analyze_url.base_url,
+             "source": analyze_url.source or None,
+             "__bridge__": _StubBridge()},
+        )
+        resp.body = "" if ev is None else str(ev)
+    return resp
+
+
+class _StubBridge:
+    pass
+
+
+# --------------------------------------------------------------------- util
+_IMG_RE = re.compile(r"<img[^>]*>", re.IGNORECASE)
+_SRC_RE = re.compile(r"""src\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+_SCRIPT_RE = re.compile(r"<(script|style)[\s\S]*?</\1>", re.IGNORECASE)
+_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_BLOCK_RE = re.compile(
+    r"</?(?:p|div|section|article|h[1-6]|li|tr|blockquote|pre|td|th)[^>]*>",
+    re.IGNORECASE,
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def format_content_keep_img(raw: str, base_url: str) -> str:
+    images: list[str] = []
+
+    def _img(m: re.Match) -> str:
+        sm = _SRC_RE.search(m.group(0))
+        src = sm.group(1) if sm else ""
+        absu = get_absolute_url(base_url, src) if src else ""
+        images.append(f'<img src="{absu}">')
+        return f"\x00IMG{len(images) - 1}\x00"
+
+    text = _SCRIPT_RE.sub("", raw)
+    text = _IMG_RE.sub(_img, text)
+    text = _BR_RE.sub("\n", text)
+    text = _BLOCK_RE.sub("\n", text)
+    text = _TAG_RE.sub("", text)
+    if "&" in text:
+        text = html_mod.unescape(text)
+
+    out: list[str] = []
+    blank = 0
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if not ln:
+            blank += 1
+            if blank <= 1:
+                out.append("")
+            continue
+        blank = 0
+        out.append(re.sub(r"\x00IMG(\d+)\x00", lambda m: images[int(m.group(1))], ln))
+    return "\n".join(out).strip("\n")
+
+
+# -------------------------------------------------------------------- search
+async def _fetch_book_list(
+    source: dict, url: str, *, key: str | None, page: int, rules: dict,
+    is_search: bool = False,
+) -> list[dict]:
+    """Fetch one list page and parse it as books with the given rule map.
+
+    ``url`` is a raw legado URL rule (may contain {{key}} / {{page}} / options).
+    """
+    if not url:
+        raise RuleError("书源未配置列表/搜索地址")
+    aurl = AnalyzeUrl(
+        url,
+        key=key,
+        page=page,
+        base_url=source.get("bookSourceUrl", ""),
+        source=source,
+    )
+    res = await fetch_str(aurl)
+    if res.error:
+        raise FetchError(res.error, res.status)
+    # 规则求值可能内嵌同步 java.ajax（dukpy 无法 await），放到线程池执行，
+    # 避免阻塞事件循环拖慢所有并发请求。
+    return await asyncio.to_thread(
+        _parse_book_list, source, rules, res.url, res.body,
+        is_search=is_search,
+    )
+
+
+def _parse_info_page(source: dict, body: str, url: str) -> dict:
+    """Parse an already-fetched page as a single BookInfo (ruleBookInfo only).
+
+    Mirrors the getInfoItem fallback of legado's BookList: a fresh book whose
+    bookUrl is the final (possibly redirected) page url, fields from
+    ruleBookInfo. Returns {} when no name could be extracted.
+    """
+    book = {
+        "bookUrl": url,
+        "origin": source.get("bookSourceUrl", ""),
+        "originName": source.get("bookSourceName", ""),
+    }
+    info = _apply_book_info_rules(source, book, body, url)
+    if not str(info.get("name") or "").strip():
+        return {}
+    return info
+
+
+def _parse_book_list(
+    source: dict, rules: dict, base_url: str, body: str,
+    *, is_search: bool = False,
+) -> list[dict]:
+    books: list[dict] = []
+    pattern = str(source.get("bookUrlPattern") or "")
+
+    # legado BookList: 搜索结果重定向到详情页（URL 命中 bookUrlPattern）时，
+    # 直接按详情页规则解析出单本结果。
+    if is_search and pattern:
+        try:
+            redirected = re.fullmatch(pattern, base_url) is not None
+        except re.error:
+            redirected = False
+        if redirected:
+            one = _parse_info_page(source, body, base_url)
+            return [one] if one else []
+
+    ar = AnalyzeRule(source=source, base_url=base_url)
+    ar.set_content(body, base_url=base_url)
+    list_rule = rules.get("bookList") or ""
+
+    def _fields(ar: AnalyzeRule) -> dict:
+        return {
+            "name": (ar.get_string(rules.get("name") or "") or "").strip(),
+            "author": (ar.get_string(rules.get("author") or "") or "").strip(),
+            "kind": ", ".join(ar.get_string_list(rules.get("kind") or "") or []),
+            "wordCount": (ar.get_string(rules.get("wordCount") or "") or "").strip(),
+            "intro": (ar.get_string(rules.get("intro") or "") or "").strip(),
+            "coverUrl": ar.get_string(rules.get("coverUrl") or "", is_url=True),
+            "lastChapter": (ar.get_string(rules.get("lastChapter") or "") or "").strip(),
+            "bookUrl": ar.get_string(rules.get("bookUrl") or "", is_url=True),
+            "origin": source.get("bookSourceUrl", ""),
+            "originName": source.get("bookSourceName", ""),
+        }
+
+    if not list_rule:
+        # bookList 为空：整页按单条结果兜底（legado 兼容行为）
+        one = _fields(ar)
+        if one["name"]:
+            books.append(one)
+        return books
+
+    for el in ar.get_elements(list_rule):
+        try:
+            item_ar = AnalyzeRule(source=source, base_url=base_url)
+            item_ar.set_content(el, base_url=base_url)
+            fields = _fields(item_ar)
+            if not fields["name"]:
+                continue
+            books.append(fields)
+        except Exception:  # noqa: BLE001 - per-item tolerance like legado
+            continue
+
+    # legado BookList: 列表为空且书源未配 bookUrlPattern 时，按详情页兜底解析
+    if not books and not pattern:
+        one = _parse_info_page(source, body, base_url)
+        if one:
+            books.append(one)
+    return books
+
+
+async def search_book(source: dict, key: str, page: int = 1,
+                      explore_url: str | None = None) -> list[dict]:
+    search_url = explore_url if explore_url else source.get("searchUrl", "")
+    if not search_url:
+        raise RuleError("书源未配置搜索地址")
+    rules = _as_dict(source.get("ruleSearch"))
+    return await _fetch_book_list(source, search_url, key=key, page=page,
+                                  rules=rules, is_search=True)
+
+
+async def explore_book(source: dict, url: str, page: int = 1) -> list[dict]:
+    """发现版面抓取：规则优先 ruleExplore，bookList 空白时回退 ruleSearch。"""
+    rules = _as_dict(source.get("ruleExplore"))
+    if not (rules or {}).get("bookList"):
+        rules = _as_dict(source.get("ruleSearch"))
+    return await _fetch_book_list(source, url, key=None, page=page, rules=rules)
+
+
+# ------------------------------------------------------------------ explore
+_KIND_SPLIT_RE = re.compile(r"(?:&&|\n)+")
+_KIND_KEYS = ("title", "url", "type", "action", "chars", "default",
+              "viewName", "style")
+
+
+def _kind_js_body(explore_url: str) -> str:
+    """Extract the JS body from a <js>/@js: exploreUrl (mirrors BookSourceExtensions)."""
+    if explore_url[0] == "@":
+        return explore_url[4:]
+    end = explore_url.rfind("<")
+    return explore_url[4:] if end <= 4 else explore_url[4:end]
+
+
+def explore_kinds(source: dict) -> list[dict]:
+    """Parse a book source's exploreUrl into its category (ExploreKind) list.
+
+    Mirrors BookSourceExtensions.exploreKinds(): optional <js>/@js: to build the
+    string, then JSON array or ``标题::url`` lines separated by ``&&``/newline.
+    """
+    explore_url = source.get("exploreUrl")
+    if not explore_url or not isinstance(explore_url, str) or not explore_url.strip():
+        return []
+
+    rule_str: str = explore_url.strip()
+    low = rule_str.lower()
+    if low.startswith("<js>") or low.startswith("@js:"):
+        from .js_bridge import eval_js
+
+        val = eval_js(
+            _kind_js_body(rule_str),
+            {"infoMap": {}, "source": source,
+             "baseUrl": source.get("bookSourceUrl", ""),
+             "__bridge__": _StubBridge()},
+        )
+        rule_str = "" if val is None else str(val)
+
+    text = rule_str.strip()
+    kinds: list[dict] = []
+    if text.startswith("["):
+        try:
+            arr = json.loads(text)
+        except Exception:  # noqa: BLE001 - fall through to line split
+            arr = None
+        if isinstance(arr, list):
+            for it in arr:
+                if isinstance(it, dict):
+                    kind = {k: it[k] for k in _KIND_KEYS if k in it}
+                    kind.setdefault("type", "url")
+                    kinds.append(kind)
+                elif isinstance(it, str):
+                    kinds.append({"title": it, "url": None, "type": "url"})
+            return kinds
+
+    for line in _KIND_SPLIT_RE.split(text):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("::")
+        kinds.append({
+            "title": parts[0].strip(),
+            "url": parts[1].strip() if len(parts) > 1 and parts[1].strip() else None,
+            "type": "url",
+        })
+    return kinds
+
+
+# ------------------------------------------------------------------ bookinfo
+def _meta_contents(html_text: str) -> dict[str, str]:
+    """All <meta> tag contents keyed by lowercased name/property."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"<meta\b[^>]*>", html_text or "", re.I):
+        tag = m.group(0)
+        key = re.search(r"""(?:property|name)=["']([^"']+)["']""", tag, re.I)
+        val = re.search(r"""content=["']([^"']*)["']""", tag, re.I)
+        if key and val:
+            out.setdefault(key.group(1).lower(), val.group(1))
+    return out
+
+
+def _fallback_intro(html_text: str, book_name: str) -> str:
+    """书源未配 intro 规则时的通用兜底：取页面 og:description / description。
+
+    不少站点把简介放在 meta 标签里；顺带去掉常见的「书名简介：」前缀。
+    """
+    metas = _meta_contents(html_text)
+    text = (metas.get("og:description") or metas.get("description") or "").strip()
+    if not text:
+        return ""
+    text = html_mod.unescape(text)
+    if book_name:
+        text = re.sub(rf"^{re.escape(book_name)}\s*简介\s*[:：]\s*", "", text).strip()
+        # 「XX最新章节无错更新，…提供XX全文免费在线阅读」一类的推广句不算简介
+        if f"{book_name}最新章节" in text or "全文免费在线阅读" in text:
+            return ""
+    if len(text) < 10:
+        return ""
+    return text
+
+
+def _apply_book_info_rules(source: dict, book: dict, body: str,
+                           url: str) -> dict:
+    """Run ruleBookInfo over an already-fetched page and merge into ``book``."""
+    ar = AnalyzeRule(book=book, source=source, base_url=url)
+    ar.set_content(body, base_url=url)
+    rbi = _as_dict(source.get("ruleBookInfo"))
+
+    def gs(field: str, is_url: bool = False) -> str:
+        return ar.get_string(rbi.get(field) or "", is_url=is_url) if field else ""
+
+    info = dict(book)
+    can_re_name = bool(gs("canReName").strip()) if rbi.get("canReName") else False
+    name = gs("name").strip()
+    author = gs("author").strip()
+    if name and (can_re_name or not info.get("name")):
+        info["name"] = name
+    if author and (can_re_name or not info.get("author")):
+        info["author"] = author
+    info["kind"] = ", ".join(ar.get_string_list(rbi.get("kind") or "") or [])
+    intro = gs("intro")
+    if "&" in intro:
+        intro = html_mod.unescape(intro)
+    if intro.strip():
+        info["intro"] = intro.strip()
+    elif not rbi.get("intro"):
+        # 书源没配简介规则（或规则为空）时，退回页面 meta 描述
+        fb = _fallback_intro(body, str(info.get("name") or book.get("name") or ""))
+        if fb:
+            info["intro"] = fb
+    cover = gs("coverUrl", is_url=True)
+    if cover:
+        info["coverUrl"] = cover
+    last_chapter = gs("lastChapter")
+    if last_chapter:
+        info["lastChapter"] = last_chapter
+    toc_url = gs("tocUrl", is_url=True)
+    info["tocUrl"] = toc_url.strip() or (url or book.get("bookUrl") or "")
+    return info
+
+
+async def book_info(source: dict, book: dict) -> dict:
+    book_url = book.get("bookUrl") or ""
+    aurl = AnalyzeUrl(
+        book_url,
+        base_url=source.get("bookSourceUrl", ""),
+        source=source,
+        rule_data=book,
+    )
+    res = await fetch_str(aurl)
+    if res.error:
+        raise FetchError(res.error, res.status)
+    return await asyncio.to_thread(_apply_book_info_rules, source, book, res.body, res.url)
+
+
+# ----------------------------------------------------------------------- toc
+def _parse_toc_page_sync(
+    source: dict, book: dict, rule_toc: dict, list_rule: str,
+    base_url: str, body: str, redirect_url: str,
+    collect_next: bool,
+) -> tuple[list[dict], list[str]]:
+    """Parse one toc page into (chapters_of_this_page, next_page_urls).
+
+    Sync on purpose: runs inside a worker thread via asyncio.to_thread so any
+    embedded JS (chapterName @js / nextTocUrl <js>) cannot stall the loop.
+    """
+    ar = AnalyzeRule(book=book, source=source, base_url=redirect_url)
+    ar.set_content(body, base_url=base_url)
+
+    name_rules = ar._split_source_rule(rule_toc.get("chapterName") or "")  # noqa: SLF001
+    url_rules = ar._split_source_rule(rule_toc.get("chapterUrl") or "")  # noqa: SLF001
+    vol_rules = ar._split_source_rule(rule_toc.get("isVolume") or "")  # noqa: SLF001
+    vip_rules = ar._split_source_rule(rule_toc.get("isVip") or "")  # noqa: SLF001
+
+    page_chapters: list[dict] = []
+    elements = ar.get_elements(list_rule)
+    for index, el in enumerate(elements):
+        try:
+            ar.set_content(el, base_url=redirect_url)
+            title = ar.get_string_from_list(name_rules)
+            url = ar.get_string_from_list(url_rules)
+            is_volume = bool(ar.get_string_from_list(vol_rules).strip())
+            if not url:
+                url = f"{title}{index}" if is_volume else redirect_url
+            if not title:
+                continue
+            page_chapters.append({
+                "title": title,
+                "url": url,
+                "baseUrl": redirect_url,
+                "isVolume": is_volume,
+                "isVip": bool(ar.get_string_from_list(vip_rules).strip()),
+            })
+        except Exception:  # noqa: BLE001
+            continue
+
+    next_rule = rule_toc.get("nextTocUrl") or ""
+    nxt: list[str] = []
+    if collect_next and next_rule:
+        ar.set_content(body, base_url=base_url)
+        got = ar.get_string_list(next_rule, is_url=True) or []
+        nxt = [u for u in got if u != redirect_url]
+    return page_chapters, nxt
+
+
+async def get_toc(source: dict, book: dict, toc_url: str) -> list[dict]:
+    rule_toc = _as_dict(source.get("ruleToc"))
+    list_rule = rule_toc.get("chapterList") or ""
+    reverse_prefix = list_rule.startswith("-")
+    if list_rule[:1] in ("-", "+"):
+        list_rule = list_rule[1:]
+
+    chapters: list[dict] = []
+    seen_pages = [toc_url]
+    limit = _settings().toc_page_limit
+
+    first = AnalyzeUrl(toc_url, base_url=toc_url.split(",")[0],
+                       source=source, rule_data=book)
+    res = await fetch_str(first)
+    if res.error:
+        raise FetchError(res.error, res.status)
+    page_chs, nxt = await asyncio.to_thread(
+        _parse_toc_page_sync, source, book, rule_toc, list_rule,
+        res.url, res.body, res.url, True,
+    )
+    chapters.extend(page_chs)
+
+    guard = 0
+    while nxt:
+        if len(nxt) == 1:
+            nu = nxt[0]
+            if not nu or nu in seen_pages or guard >= limit:
+                break
+            guard += 1
+            seen_pages.append(nu)
+            aurl = AnalyzeUrl(nu, base_url=nu.split(",")[0], source=source,
+                              rule_data=book)
+            r2 = await fetch_str(aurl)
+            if r2.error:
+                break
+            page_chs, nxt = await asyncio.to_thread(
+                _parse_toc_page_sync, source, book, rule_toc, list_rule,
+                r2.url, r2.body, r2.url, True,
+            )
+            chapters.extend(page_chs)
+        else:
+            # 多页并行抓取：每页各自解析成块，gather 按页序合并，避免乱序
+            fresh = [u for u in nxt if u and u not in seen_pages]
+            for u in fresh:
+                seen_pages.append(u)
+            sem = asyncio.Semaphore(max(1, _settings().parser_concurrency))
+
+            async def one(u: str) -> list[dict]:
+                async with sem:
+                    a3 = AnalyzeUrl(u, base_url=u.split(",")[0], source=source,
+                                    rule_data=book)
+                    r3 = await fetch_str(a3)
+                    if r3.error:
+                        return []
+                    chs, _ = await asyncio.to_thread(
+                        _parse_toc_page_sync, source, book, rule_toc,
+                        list_rule, r3.url, r3.body, r3.url, False,
+                    )
+                    return chs
+
+            for chunk in await asyncio.gather(*[one(u) for u in fresh]):
+                chapters.extend(chunk)
+            break
+
+    if not chapters:
+        raise RuleError("章节列表为空")
+
+    if not reverse_prefix:
+        chapters.reverse()
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for ch in chapters:
+        marker = ch["url"]
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(ch)
+    reverse_toc = bool(book.get("reverseToc"))
+    if not reverse_toc:
+        deduped.reverse()
+    for i, ch in enumerate(deduped):
+        ch["index"] = i
+    return deduped
+
+
+# ------------------------------------------------------------------- content
+async def get_content(source: dict, book: dict, chapter: dict,
+                      next_chapter_url: str | None = None,
+                      base_url: str | None = None) -> str:
+    rule_content = _as_dict(source.get("ruleContent"))
+    chapter_url = chapter.get("url") or ""
+    # chapter urls may be relative; resolve against the toc page they came from
+    aurl = AnalyzeUrl(chapter_url, base_url=base_url or chapter_url.split(",")[0],
+                      source=source, rule_data=book)
+    if not aurl.url.startswith(("http://", "https://")):
+        origin = str(source.get("bookSourceUrl") or "").split(",")[0]
+        aurl.url = get_absolute_url(origin, aurl.url)
+    res = await fetch_str(aurl)
+    if res.error:
+        raise FetchError(res.error, res.status)
+
+    texts: list[str] = []
+
+    def parse_page(url: str, body: str, redirect: str,
+                   collect_next: bool) -> tuple[str, list[str]]:
+        """Sync on purpose: content rules often embed java.ajax (blocking);
+        run inside a worker thread so the event loop stays responsive."""
+        ar = AnalyzeRule(book=book, source=source, base_url=url)
+        ar.chapter_title = chapter.get("title")
+        ar.next_chapter_url = next_chapter_url
+        ar.set_content(body, base_url=url)
+        raw = ar.get_string(rule_content.get("content") or "", unescape=False)
+        text = format_content_keep_img(raw, redirect or url)
+        nxt: list[str] = []
+        if collect_next and rule_content.get("nextContentUrl"):
+            got = ar.get_string_list(rule_content["nextContentUrl"], is_url=True) or []
+            nxt = [u for u in got if u and u != redirect]
+        return text, nxt
+
+    text1, nxt1 = await asyncio.to_thread(parse_page, res.url, res.body, res.url, True)
+    texts.append(text1)
+    page_count = 1
+
+    def append(text: str) -> None:
+        nonlocal page_count
+        if page_count > 0 and text:
+            texts.append("")
+        if text:
+            texts.append(text)
+        page_count += 1
+
+    visited = [chapter_url]
+    if len(nxt1) == 1:
+        next_url = nxt1[0]
+        guard = 0
+        while next_url and next_url not in visited \
+                and guard <= _settings().content_page_limit:
+            guard += 1
+            base_for_abs = res.url
+            if next_chapter_url and get_absolute_url(base_for_abs, next_url) == \
+                    get_absolute_url(base_for_abs, next_chapter_url):
+                break
+            visited.append(next_url)
+            a2 = AnalyzeUrl(next_url, base_url=next_url.split(",")[0],
+                            source=source, rule_data=book)
+            r2 = await fetch_str(a2)
+            if r2.error:
+                break
+            t2, n2 = await asyncio.to_thread(parse_page, r2.url, r2.body, r2.url, True)
+            append(t2)
+            next_url = n2[0] if n2 else ""
+    elif len(nxt1) > 1:
+        fresh = [u for u in nxt1 if u not in visited]
+        visited.extend(fresh)
+        sem = asyncio.Semaphore(max(1, _settings().parser_concurrency))
+
+        async def one(u: str) -> str:
+            async with sem:
+                a3 = AnalyzeUrl(u, base_url=u.split(",")[0], source=source,
+                                rule_data=book)
+                r3 = await fetch_str(a3)
+                if r3.error:
+                    return ""
+                t3, _ = await asyncio.to_thread(parse_page, r3.url, r3.body, r3.url, False)
+                return t3
+
+        for t in await asyncio.gather(*[one(u) for u in fresh]):
+            append(t)
+
+    content_str = "\n".join(texts)
+
+    replace_regex = rule_content.get("replaceRegex") or ""
+    if replace_regex:
+        content_str = "\n".join(l.rstrip() for l in content_str.splitlines())
+        ar = AnalyzeRule(book=book, source=source, base_url=res.url)
+        ar.set_content(content_str)
+        try:
+            content_str = ar.get_string(replace_regex)
+        except Exception:  # noqa: BLE001
+            pass
+        content_str = "\n".join(
+            "　　" + l for l in content_str.splitlines() if l.strip()
+        )
+    if not chapter.get("isVolume") and not content_str.strip():
+        raise RuleError("内容为空")
+    return content_str

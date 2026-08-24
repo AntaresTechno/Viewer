@@ -1,0 +1,61 @@
+# ===== Python（backend）=====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+backend/.venv/
+.venv/
+venv/
+env/
+
+# 测试 / 工具缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ===== 运行时数据（自动生成，勿入库）=====
+# SQLite 数据库、封面磁盘缓存等均由后端启动时自动创建
+backend/data/
+
+# 环境变量（含密钥配置）
+.env
+.env.*
+!.env.example
+
+# ===== 前端（frontend）=====
+node_modules/
+frontend/dist/
+dist/
+*.local
+.vite/
+
+# 日志
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== 操作系统 =====
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+._*
+
+# 临时 / 备份文件
+*.tmp
+*.bak
+*.orig
+*~

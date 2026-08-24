@@ -1,0 +1,59 @@
+.login-wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(1200px 500px at 20% -10%,
+      color-mix(in srgb, var(--m-color-primary) 14%, transparent),
+      transparent),
+    var(--m-color-background);
+  padding: 24px;
+}
+/* md3 的毛玻璃与背景光斑样式统一放在 theme/design.css（需全局作用域） */
+
+.panel {
+  width: 380px;
+  max-width: 100%;
+  padding: 28px;
+}
+.hero {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+.logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: var(--m-color-primary);
+  color: var(--m-color-on-primary);
+  font-size: 26px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  margin-bottom: 4px;
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.error {
+  color: var(--m-color-error);
+  font-size: 13px;
+}
+.alt {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--m-color-on-surface-secondary);
+}
+.hint {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--m-color-outline);
+}

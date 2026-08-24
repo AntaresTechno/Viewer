@@ -1,0 +1,245 @@
+/*
+ * Viewer · 全局共享工具类 + 全局动效
+ * 从各页面抽出的重复样式，统一走 --m-* token，两种设计（miuix / md3）自动适配。
+ * 在 theme/design.css 之后加载。
+ */
+
+/* ---- MiuixCard 结构修正与统一内边距 ----
+ * MiuixCard 渲染为 <div.m-card-wrapper>(透明壳，承接 scoped class/事件)
+ *                     └ <div.m-card>(真正可见的卡片)
+ * 因此：内边距必须给到内层 .m-card；wrapper 只负责布局定位。 */
+.m-card {
+  padding: var(--app-card-pad, 16px);
+}
+.m-card-wrapper > .m-card {
+  width: 100%;
+}
+
+/* ---- 全局动效（尊重系统减弱动态偏好） ---- */
+@media (prefers-reduced-motion: no-preference) {
+  /* 卡片入场：轻微上浮淡入，同容器内依次错开 */
+  .m-card-wrapper {
+    animation: rise-in 0.34s cubic-bezier(0.16, 0.84, 0.44, 1) both;
+  }
+  .m-card-wrapper:nth-child(2) { animation-delay: 0.04s; }
+  .m-card-wrapper:nth-child(3) { animation-delay: 0.08s; }
+  .m-card-wrapper:nth-child(4) { animation-delay: 0.12s; }
+  .m-card-wrapper:nth-child(5) { animation-delay: 0.16s; }
+  .m-card-wrapper:nth-child(n + 6) { animation-delay: 0.2s; }
+
+  /* 可点击卡片悬浮上浮（书架 entry / 搜索结果 book-card / 仪表盘 stat） */
+  .m-card {
+    transition:
+      transform 0.18s ease,
+      box-shadow 0.18s ease;
+  }
+  .entry:hover > .m-card,
+  .book-card:hover > .m-card,
+  .stat:hover > .m-card {
+    transform: translateY(-3px);
+    box-shadow: var(--app-shadow-card-hover, 0 6px 18px rgba(0, 0, 0, 0.12));
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 路由切换过渡（AppShell 中使用） */
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active {
+    transition: none;
+  }
+}
+
+/* ---- 页面脚手架 ---- */
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.page-title {
+  margin: 4px 0 14px;
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--m-color-on-surface);
+}
+
+.center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 32px;
+}
+
+.empty {
+  color: var(--m-color-on-background-variant);
+}
+
+.err {
+  color: var(--m-color-error);
+  font-size: 13px;
+}
+
+.ok {
+  color: #2e7d32;
+  font-size: 13px;
+}
+
+/* ---- 管理页表格 ---- */
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.md-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--m-color-on-surface-secondary);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--m-color-outline);
+  white-space: nowrap;
+}
+.md-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--m-color-divider-line);
+  vertical-align: middle;
+}
+.md-table tr:hover td {
+  background: var(--m-color-surface-container);
+}
+
+/* ---- 可选中芯片 ---- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--m-color-outline);
+  color: var(--m-color-on-surface-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  font-family: inherit;
+}
+.chip.selected {
+  background: var(--m-color-secondary-container);
+  border-color: transparent;
+  color: var(--m-color-on-secondary-container);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chip {
+    transition:
+      background 0.15s ease,
+      color 0.15s ease,
+      transform 0.1s ease;
+  }
+  .chip:active {
+    transform: scale(0.96);
+  }
+}
+
+/* ---- 文本操作按钮 ---- */
+.linkbtn {
+  border: 0;
+  background: none;
+  color: var(--m-color-primary);
+  cursor: pointer;
+  font-size: 13px;
+  margin-left: 8px;
+  padding: 0;
+  font-family: inherit;
+}
+.linkbtn.danger {
+  color: var(--m-color-error);
+}
+
+/* ---- 对话框底部按钮排 ---- */
+.dlg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* ---- 裸密码输入框（对话框内用） ---- */
+.pw-input {
+  border: 1px solid var(--m-color-outline);
+  border-radius: var(--app-radius-input, 12px);
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--m-color-on-surface);
+  font: inherit;
+  outline: none;
+}
+.pw-input:focus {
+  border-color: var(--m-color-primary);
+}
+
+/* ---- 多行文本框（个人简介 / 书源 JSON） ---- */
+textarea.inp,
+textarea {
+  width: 100%;
+  border: 1px solid var(--m-color-outline);
+  border-radius: var(--app-radius-input, 12px);
+  background: transparent;
+  color: var(--m-color-on-surface);
+  font: inherit;
+  outline: none;
+  padding: 10px;
+  resize: vertical;
+}
+textarea:focus {
+  border-color: var(--m-color-primary);
+}
+
+/* ---- Chrome / Edge 自动填充修复 ----
+ * 1) 用输入框自身的填充色画一层 inset box-shadow，盖掉浏览器套的
+ *    黄/衬底色，并把文字色修正为主题色（避免出现残留的浅色内框）；
+ * 2) 定义一张无变化的关键帧动画：Chrome 自动填充完成时会触发 animationstart，
+ *    由 main.ts 里的监听器据此把值同步进 Vue 模型（自动填充不一定触发 input 事件）。
+ */
+@keyframes onAutoFillStart {
+  from { background-color: transparent; }
+  to   { background-color: transparent; }
+}
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--m-color-on-background);
+  caret-color: var(--m-color-primary);
+  /* 用字段自身的填充底色盖住自动填充色块 */
+  -webkit-box-shadow: 0 0 0 1000px var(--m-color-secondary-container) inset !important;
+  box-shadow: 0 0 0 1000px var(--m-color-secondary-container) inset !important;
+  animation-name: onAutoFillStart;
+  animation-duration: 0.01s;
+}

@@ -1,0 +1,20 @@
+# View backend — FastAPI + Python
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-multipart>=0.0.9
+SQLAlchemy[asyncio]>=2.0
+aiosqlite>=0.20
+PyJWT>=2.8
+httpx>=0.27
+beautifulsoup4>=4.12
+soupsieve>=2.5
+lxml>=5.2
+cssselect>=1.2
+jsonpath-ng>=1.6
+
+# JS engine for legado rules — at least one is required for @js / {{}} rules.
+# quickjs has no CPython 3.14 wheel yet; dukpy (QuickJS-backed) works everywhere.
+dukpy>=0.4 ; python_version >= "3.14"
+quickjs ; python_version < "3.14"
