@@ -1,16 +1,53 @@
 /*
  * Viewer · 双设计系统（dual design system）
  *
- * 通过 <html data-design="miuix|md3"> 切换整套设计语言；
+ * 通过 <html data-design="miuix|md3e"> 切换整套设计语言；
  * 外观明暗由 miuix-vue 以 `.m-theme-dark` 类挂在 <html> 上驱动。
  *
- *   [data-design="miuix"] → miuix 原生 HyperOS 风：原生蓝白/暗色板、16px 圆角、扁平表面
- *   [data-design="md3"]   → Material Design 3：Google 蓝色调色板、药丸按钮、
- *                           外描边输入框、大圆角卡片 + 轻投影
+ *   [data-design="miuix"] → miuix 原生 HyperOS 风：原生蓝白/暗色板、扁平表面、
+ *                           克制（临界阻尼）的动效
+ *   [data-design="md3e"]  → Material Design 3 Expressive：高饱和 tonal 色板、
+ *                           形状形变（shape-morph）按钮、大圆角卡片、带轻微
+ *                           回弹的弹簧动效
+ *
+ * 动效基础（Apple「Fluid Interfaces」原则的落地）：
+ *   - 弹簧缓动用 CSS linear() 逐段逼近真实弹簧曲线（可中断、无固定时长感）；
+ *   - 所有交互动画只碰 transform / opacity / border-radius，保证合成器友好；
+ *   - 按压反馈发生在 pointer-down（:active），而不是松手之后。
  *
  * 本文件只负责「token + 组件形制覆盖」；通用工具类见 styles/base.css。
  * 需在 miuix-vue/style.css 之后加载。
  */
+
+/* ================================================================ *
+ *  全局动效 token —— 两种设计共享同一套弹簧物理
+ *  --app-ease-spring：ζ≈0.78 的欠阻尼弹簧（约 2% 回弹，550ms 收敛）
+ *  --app-ease-calm  ：临界阻尼弹簧（无回弹，450ms 收敛）
+ *  不支持 linear() 的浏览器自动回退到近似 cubic-bezier。
+ * ================================================================ */
+:root {
+  --app-ease-spring: cubic-bezier(0.3, 1.12, 0.4, 1);
+  --app-ease-calm: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --app-dur-spring: 0.55s;
+  --app-dur-calm: 0.45s;
+  --app-dur-micro: 0.18s;
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    /* x(t) = 1 - e^(-ζωt)(cos(ω_d t) + ζω/ω_d · sin(ω_d t))，ζ=0.78, ω₀=17 */
+    --app-ease-spring: linear(
+      0, 0.0618, 0.2009, 0.3664, 0.5276, 0.6685, 0.7825, 0.8689,
+      0.9308, 0.9722, 0.9979, 1.0121, 1.0185, 1.0199, 1.0184, 1.0156,
+      1.0122, 1.0091, 1.0063, 1.0041, 1.0024, 1.0013, 1.0005, 1
+    );
+    /* x(t) = 1 - (1 + ωt)e^(-ωt)，ω=14（临界阻尼） */
+    --app-ease-calm: linear(
+      0, 0.0403, 0.1319, 0.244, 0.3589, 0.467, 0.5634, 0.6466,
+      0.7168, 0.7748, 0.8222, 0.8604, 0.8909, 0.9151, 0.9342, 0.9492,
+      0.9609, 0.97, 0.977, 0.9824, 1
+    );
+  }
+}
 
 /* ================================================================ *
  *  MIUIX —— 原生默认，仅注入 app 级形状/字体变量，不改 miuix 色板
@@ -33,24 +70,25 @@ html[data-design="miuix"] {
 }
 
 /* ================================================================ *
- *  MD3 —— Material Design 3 tonal palette（seed ~#4285F4 / tone40 #0B57D0）
+ *  MD3 EXPRESSIVE —— 高饱和 Material 3 tonal palette
+ *  （蓝 primary + 紫罗兰 tertiary 的双色对比是 M3E 的标志性搭配）
  * ================================================================ */
-html[data-design="md3"] {
+html[data-design="md3e"] {
   /* primary */
   --m-color-primary: #0b57d0;
   --m-color-on-primary: #ffffff;
   --m-color-primary-variant: #0b57d0;
-  --m-color-on-primary-variant: #d3e3fd;
+  --m-color-on-primary-variant: #d9e2ff;
   --m-color-disabled-primary: #bcd2f2;
   --m-color-disabled-on-primary: #ffffff;
   --m-color-disabled-primary-button: #bcd2f2;
   --m-color-disabled-on-primary-button: #ffffff;
   --m-color-disabled-primary-slider: #a9c5ec;
-  --m-color-primary-container: #d3e3fd;
+  --m-color-primary-container: #d9e2ff;
   --m-color-on-primary-container: #041e49;
 
   /* secondary / containers */
-  --m-color-secondary: #dde7f6;
+  --m-color-secondary: #dbe4f7;
   --m-color-on-secondary: #16243d;
   --m-color-secondary-variant: #edf2fb;
   --m-color-on-secondary-variant: #44474e;
@@ -58,16 +96,16 @@ html[data-design="md3"] {
   --m-color-disabled-on-secondary: #f7f9fc;
   --m-color-disabled-secondary-variant: #ebeff6;
   --m-color-disabled-on-secondary-variant: #b3bac6;
-  --m-color-secondary-container: #d8e2f5;
+  --m-color-secondary-container: #dae4fb;
   --m-color-on-secondary-container: #0f2038;
-  --m-color-secondary-container-variant: #ccd8ee;
+  --m-color-secondary-container-variant: #ccd9f2;
   --m-color-on-secondary-container-variant: #33415a;
 
-  /* tertiary */
-  --m-color-tertiary-container: #c9e9f7;
-  --m-color-on-tertiary-container: #073042;
-  --m-color-tertiary-container-variant: #bcdff0;
-  --m-color-on-tertiary-container-variant: #234a5c;
+  /* tertiary —— 紫罗兰强调色（M3E 双色对比） */
+  --m-color-tertiary-container: #e7dbff;
+  --m-color-on-tertiary-container: #25005a;
+  --m-color-tertiary-container-variant: #dcccfb;
+  --m-color-on-tertiary-container-variant: #3d1d72;
 
   /* error */
   --m-color-error: #b3261e;
@@ -100,10 +138,10 @@ html[data-design="md3"] {
   --m-icon-button-bg: transparent;
   --m-fab-color: #0b57d0;
 
-  /* MD3 卡片：贴近 surface 的低对比色调，避免与背景脱节 */
-  --m-card-color: #f5f7fb;
+  /* M3E 卡片：贴近 surface 的低对比色调，靠大圆角与投影分层 */
+  --m-card-color: #f5f7fd;
 
-  /* app 级形状 / 字体 */
+  /* app 级形状刻度（M3E 加大了圆角上限） */
   --app-font:
     "Roboto",
     "Segoe UI",
@@ -112,16 +150,18 @@ html[data-design="md3"] {
     "PingFang SC",
     "Microsoft YaHei",
     sans-serif;
-  --app-radius-card: 16px;
-  --app-radius-input: 10px;
+  --app-radius-card: 20px;
+  --app-radius-input: 14px;
+  --app-radius-lg: 24px;
+  --app-radius-xl: 28px;
   --app-shadow-card: 0 1px 2px rgba(23, 32, 51, 0.05);
-  --app-shadow-card-hover: 0 4px 14px rgba(23, 32, 51, 0.1);
+  --app-shadow-card-hover: 0 6px 18px rgba(23, 32, 51, 0.11);
   --app-shadow-pop:
     0 4px 6px rgba(23, 32, 51, 0.06),
     0 12px 32px rgba(23, 32, 51, 0.14);
 }
 
-html[data-design="md3"].m-theme-dark {
+html[data-design="md3e"].m-theme-dark {
   --m-color-primary: #a8c7fa;
   --m-color-on-primary: #062e6f;
   --m-color-primary-variant: #a8c7fa;
@@ -132,10 +172,10 @@ html[data-design="md3"].m-theme-dark {
   --m-color-disabled-on-primary-button: #75849f;
   --m-color-disabled-primary-slider: #43526b;
   --m-color-primary-container: #0842a0;
-  --m-color-on-primary-container: #d3e3fd;
+  --m-color-on-primary-container: #d9e2ff;
 
   --m-color-secondary: #39455c;
-  --m-color-on-secondary: #d8e2f5;
+  --m-color-on-secondary: #dbe4f7;
   --m-color-secondary-variant: #2e3849;
   --m-color-on-secondary-variant: #c3cbd8;
   --m-color-disabled-secondary: #2c3442;
@@ -143,14 +183,14 @@ html[data-design="md3"].m-theme-dark {
   --m-color-disabled-secondary-variant: #2a3240;
   --m-color-disabled-on-secondary-variant: #6b7382;
   --m-color-secondary-container: #39455c;
-  --m-color-on-secondary-container: #d8e2f5;
+  --m-color-on-secondary-container: #dbe4f7;
   --m-color-secondary-container-variant: #414f68;
   --m-color-on-secondary-container-variant: #c9d3e6;
 
-  --m-color-tertiary-container: #0c4a63;
-  --m-color-on-tertiary-container: #c9e9f7;
-  --m-color-tertiary-container-variant: #12556f;
-  --m-color-on-tertiary-container-variant: #bcdff0;
+  --m-color-tertiary-container: #4b2683;
+  --m-color-on-tertiary-container: #e7dbff;
+  --m-color-tertiary-container-variant: #553092;
+  --m-color-on-tertiary-container-variant: #dcccfb;
 
   --m-color-error: #f2b8b5;
   --m-color-on-error: #601410;
@@ -186,49 +226,62 @@ html[data-design="md3"].m-theme-dark {
 }
 
 /* ================================================================ *
- *  MD3 组件形制覆盖（形状 / 字重 / 投影 / 输入框风格）
+ *  MD3E 组件形制覆盖（形状 / 字重 / 投影 / 输入框风格）
  *  只改形制，颜色一律走上面的 token。
+ *  标志性动作：按钮按下时圆角从药丸收拢成圆角矩形 —— M3E 的
+ *  shape morph，用弹簧曲线驱动，可被再次点击随时打断。
  * ================================================================ */
 
-/* 按钮 → MD3 药丸；普通按钮 = filled tonal（secondary-container） */
-html[data-design="md3"] .m-button {
+/* 按钮 → 药丸；普通按钮 = filled tonal（secondary-container）；
+ * 按压时形状收拢 + 轻微下压（反馈发生在 pointer-down）。 */
+html[data-design="md3e"] .m-button {
   border-radius: 999px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.2px;
+  transition:
+    border-radius var(--app-dur-spring) var(--app-ease-spring),
+    transform var(--app-dur-micro) var(--app-ease-calm);
 }
-html[data-design="md3"] .m-button:not(.m-button--primary):not(.m-button--disabled) {
+html[data-design="md3e"] .m-button:not(.m-button--primary):not(.m-button--disabled) {
   background: var(--m-color-secondary-container);
   color: var(--m-color-on-secondary-container);
 }
-
-/* 图标按钮保持正圆 */
-html[data-design="md3"] .m-icon-button {
-  --m-icon-button-radius: 999px;
+html[data-design="md3e"] .m-button:not(.m-button--disabled):active {
+  border-radius: var(--app-radius-input, 14px);
+  transform: scale(0.97);
 }
 
-/* 卡片 → 大圆角 + 轻 MD3 投影 */
-html[data-design="md3"] .m-card {
+/* 图标按钮保持正圆，按下即时收缩（pointer-down 反馈） */
+html[data-design="md3e"] .m-icon-button {
+  --m-icon-button-radius: 999px;
+}
+html[data-design="md3e"] .m-icon-button:not(.m-icon-button--disabled):active {
+  transform: scale(0.88);
+}
+
+/* 卡片 → 大圆角 + 轻 M3E 投影 */
+html[data-design="md3e"] .m-card {
   border-radius: var(--app-radius-card);
   box-shadow: var(--app-shadow-card);
 }
 
-/* 对话框 → 28dp */
-html[data-design="md3"] .m-dialog__content,
-html[data-design="md3"] .m-bottom-sheet__inner {
-  border-radius: 28px;
+/* 对话框 / 底部弹层 → extra-large 28dp */
+html[data-design="md3e"] .m-dialog__content,
+html[data-design="md3e"] .m-bottom-sheet__inner {
+  border-radius: var(--app-radius-xl, 28px);
 }
 
 /* 输入框 → outlined text field：透明底 + 描边环，聚焦变主色粗环。
  * 注意：MiuixInput 组件始终内联写入 box-shadow（未聚焦时为 0px 环），
  * 内联样式优先级高于普通选择器，因此这里必须 !important 才能显示描边，
  * 否则输入框在未聚焦时完全无边框（看起来像 UI 损坏）。 */
-html[data-design="md3"] .m-input {
+html[data-design="md3e"] .m-input {
   background: transparent;
   border-radius: var(--app-radius-input);
   box-shadow: inset 0 0 0 1px var(--m-color-outline) !important;
   transition: box-shadow 0.15s ease;
 }
-html[data-design="md3"] .m-input:focus-within {
+html[data-design="md3e"] .m-input:focus-within {
   box-shadow: inset 0 0 0 2px var(--m-color-primary) !important;
 }
 
@@ -237,29 +290,29 @@ html[data-design="md3"] .m-input:focus-within {
 .m-input__field {
   border-radius: var(--m-radius-md, 16px);
 }
-html[data-design="md3"] .m-input__field {
+html[data-design="md3e"] .m-input__field {
   border-radius: var(--app-radius-input);
 }
-html[data-design="md3"] .m-snackbar__inner {
+html[data-design="md3e"] .m-snackbar__inner {
   border-radius: 16px;
 }
 
 /* 登录/注册卡片 → 玻璃拟态：半透明面 + 背景模糊 + 细描边。
  * backdrop-filter 模糊的是卡片「下方」的实际像素，
  * 纯色背景模糊后毫无变化，所以先铺两团光斑再上玻璃。 */
-html[data-design="md3"] .login-wrap {
+html[data-design="md3e"] .login-wrap {
   position: relative;
   overflow: hidden;
 }
-html[data-design="md3"] .login-wrap::before,
-html[data-design="md3"] .login-wrap::after {
+html[data-design="md3e"] .login-wrap::before,
+html[data-design="md3e"] .login-wrap::after {
   content: "";
   position: absolute;
   border-radius: 50%;
   pointer-events: none;
   z-index: 0;
 }
-html[data-design="md3"] .login-wrap::before {
+html[data-design="md3e"] .login-wrap::before {
   width: 460px;
   height: 460px;
   top: -110px;
@@ -268,36 +321,67 @@ html[data-design="md3"] .login-wrap::before {
     color-mix(in srgb, var(--m-color-primary) 50%, transparent),
     transparent 68%);
 }
-html[data-design="md3"] .login-wrap::after {
+html[data-design="md3e"] .login-wrap::after {
   width: 520px;
   height: 520px;
   bottom: -130px;
   right: calc(50% - 480px);
   background: radial-gradient(circle at 60% 60%,
-    color-mix(in srgb, var(--m-color-tertiary-container) 85%, transparent),
+    color-mix(in srgb, var(--m-color-tertiary-container) 90%, transparent),
     transparent 66%);
 }
 /* 卡片壳（MiuixCard 的 .m-card-wrapper 承接模板 class）浮在光斑之上 */
-html[data-design="md3"] .login-wrap .panel {
+html[data-design="md3e"] .login-wrap .panel {
   position: relative;
   z-index: 1;
 }
-html[data-design="md3"] .login-wrap .m-card {
+html[data-design="md3e"] .login-wrap .m-card {
   background: color-mix(in srgb, var(--m-color-surface) 58%, transparent);
   -webkit-backdrop-filter: blur(22px) saturate(160%);
   backdrop-filter: blur(22px) saturate(160%);
   border: 1px solid color-mix(in srgb, var(--m-color-outline) 40%, transparent);
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  html[data-design="md3"] .login-wrap .m-card {
+  html[data-design="md3e"] .login-wrap .m-card {
     /* 不支持背景模糊的浏览器：退回接近实色的面板 */
     background: color-mix(in srgb, var(--m-color-surface) 94%, transparent);
   }
 }
+/* 减弱透明度偏好：玻璃退成近实色，保住文字可读性 */
+@media (prefers-reduced-transparency: reduce) {
+  html[data-design="md3e"] .login-wrap .m-card {
+    background: color-mix(in srgb, var(--m-color-surface) 96%, transparent);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
 
 /* 弹出层统一用设计级阴影 */
-html[data-design="md3"] .m-dropdown-preference__popup {
+html[data-design="md3e"] .m-dropdown-preference__popup {
   box-shadow: var(--app-shadow-pop);
+}
+
+/* ================================================================ *
+ *  顶部栏 —— 半透明材料化（两种设计共用）
+ *  内容从栏下穿过而不是把栏当成不透明的墙：
+ *    AppShell 给 MiuixTopAppBar 传 color="transparent" 关掉内联底色，
+ *    这里补上毛玻璃 + 极细底缘。减弱透明度偏好下退为实色。
+ * ================================================================ */
+.m-top-app-bar {
+  position: sticky;
+  top: 0;
+  z-index: 800;
+  background: color-mix(in srgb, var(--m-color-surface) 72%, transparent) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--m-color-on-surface) 7%, transparent);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .m-top-app-bar {
+    background: var(--m-color-surface) !important;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 /* ================================================================ *
@@ -324,6 +408,13 @@ a {
   text-decoration: none;
 }
 
+/* 键盘导航焦点环：鼠标点击不出现，Tab 导航清晰可见。
+ * 不改 border-radius —— 焦点环自动跟随元素自身圆角。 */
+:focus-visible {
+  outline: 2px solid var(--m-color-primary);
+  outline-offset: 2px;
+}
+
 /* ================================================================ *
  *  明暗切换动画（View Transitions）
  *  - 默认：新旧画面快速交叉淡入；
@@ -341,4 +432,12 @@ html.vt-circle ::view-transition-new(root) {
 }
 html.vt-circle ::view-transition-new(root) {
   z-index: 1;
+}
+
+/* 减弱动态偏好：交叉淡入替代一切位移类过渡 */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 0.15s !important;
+  }
 }

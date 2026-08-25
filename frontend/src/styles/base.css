@@ -1,6 +1,10 @@
 /*
  * Viewer · 全局共享工具类 + 全局动效
- * 从各页面抽出的重复样式，统一走 --m-* token，两种设计（miuix / md3）自动适配。
+ * 从各页面抽出的重复样式，统一走 --m-* token，两种设计（miuix / md3e）自动适配。
+ * 动效三原则（Apple Fluid Interfaces）：
+ *   1. 反馈发生在 pointer-down（:active），不等 click；
+ *   2. 弹簧缓动（--app-ease-*，见 theme/design.css），可被打断、无固定时长感；
+ *   3. 只动 transform / opacity / 阴影，保持合成器友好。
  * 在 theme/design.css 之后加载。
  */
 
@@ -17,9 +21,9 @@
 
 /* ---- 全局动效（尊重系统减弱动态偏好） ---- */
 @media (prefers-reduced-motion: no-preference) {
-  /* 卡片入场：轻微上浮淡入，同容器内依次错开 */
+  /* 卡片入场：轻微上浮淡入，同容器内依次错开（弹簧收敛，无生硬终点） */
   .m-card-wrapper {
-    animation: rise-in 0.34s cubic-bezier(0.16, 0.84, 0.44, 1) both;
+    animation: rise-in 0.5s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)) both;
   }
   .m-card-wrapper:nth-child(2) { animation-delay: 0.04s; }
   .m-card-wrapper:nth-child(3) { animation-delay: 0.08s; }
@@ -27,17 +31,26 @@
   .m-card-wrapper:nth-child(5) { animation-delay: 0.16s; }
   .m-card-wrapper:nth-child(n + 6) { animation-delay: 0.2s; }
 
-  /* 可点击卡片悬浮上浮（书架 entry / 搜索结果 book-card / 仪表盘 stat） */
-  .m-card {
+  /* 可点击卡片：悬浮上浮（弹簧），按下即时回落 —— 悬浮态与按压态
+   * 连续过渡，中途移开/按下都不会跳变。 */
+  .entry > .m-card,
+  .book-card > .m-card,
+  .stat > .m-card {
     transition:
-      transform 0.18s ease,
-      box-shadow 0.18s ease;
+      transform 0.45s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)),
+      box-shadow 0.25s ease;
   }
   .entry:hover > .m-card,
   .book-card:hover > .m-card,
   .stat:hover > .m-card {
-    transform: translateY(-3px);
+    transform: translateY(-4px);
     box-shadow: var(--app-shadow-card-hover, 0 6px 18px rgba(0, 0, 0, 0.12));
+  }
+  .entry:active > .m-card,
+  .book-card:active > .m-card,
+  .stat:active > .m-card {
+    transform: translateY(-1px) scale(0.985);
+    transition-duration: 0.12s;
   }
 }
 
@@ -52,16 +65,18 @@
   }
 }
 
-/* 路由切换过渡（AppShell 中使用） */
+/* 路由切换过渡（AppShell 中使用）
+ * 前进语义：旧页轻微上飘淡出、新页自下浮入 —— 方向感一致，
+ * 距离刻意小（<10px），避免页面级大位移。 */
 .page-enter-active,
 .page-leave-active {
   transition:
-    opacity 0.16s ease,
-    transform 0.16s ease;
+    opacity 0.18s var(--app-ease-calm, ease),
+    transform 0.18s var(--app-ease-calm, ease);
 }
 .page-enter-from {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(9px);
 }
 .page-leave-to {
   opacity: 0;
@@ -83,9 +98,13 @@
   margin-bottom: 14px;
 }
 
+/* 大标题：字号越大字距越紧（optical sizing 纪律），
+ * 层级由 字重 + 字号 + 行高 共同承担。 */
 .page-title {
   margin: 4px 0 14px;
-  font-size: 21px;
+  font-size: 23px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
   font-weight: 700;
   color: var(--m-color-on-surface);
 }
@@ -121,6 +140,7 @@
 .md-table th {
   text-align: left;
   font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--m-color-on-surface-secondary);
   padding: 10px 12px;
   border-bottom: 1px solid var(--m-color-outline);
@@ -135,7 +155,8 @@
   background: var(--m-color-surface-container);
 }
 
-/* ---- 可选中芯片 ---- */
+/* ---- 可选中芯片 ----
+ * 底色响应要快（0.12s，几乎即时），形变走弹簧 —— 点上去先变色再回弹。 */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -158,16 +179,18 @@
 @media (prefers-reduced-motion: no-preference) {
   .chip {
     transition:
-      background 0.15s ease,
-      color 0.15s ease,
-      transform 0.1s ease;
-  }
-  .chip:active {
-    transform: scale(0.96);
+      background 0.12s ease-out,
+      border-color 0.12s ease-out,
+      color 0.12s ease-out,
+      transform 0.35s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
   }
 }
+.chip:active {
+  transform: scale(0.94);
+}
 
-/* ---- 文本操作按钮 ---- */
+/* ---- 文本操作按钮 ----
+ * 细小的文字按钮没有底色可变，按压反馈用透明度（即时、无位移）。 */
 .linkbtn {
   border: 0;
   background: none;
@@ -180,6 +203,12 @@
 }
 .linkbtn.danger {
   color: var(--m-color-error);
+}
+.linkbtn:active,
+.rm:active,
+.retry:active,
+.logout:active {
+  opacity: 0.55;
 }
 
 /* ---- 对话框底部按钮排 ---- */
@@ -199,9 +228,11 @@
   color: var(--m-color-on-surface);
   font: inherit;
   outline: none;
+  transition: border-color 0.12s ease-out, box-shadow 0.12s ease-out;
 }
 .pw-input:focus {
   border-color: var(--m-color-primary);
+  box-shadow: inset 0 0 0 1px var(--m-color-primary);
 }
 
 /* ---- 多行文本框（个人简介 / 书源 JSON） ---- */
@@ -216,9 +247,11 @@ textarea {
   outline: none;
   padding: 10px;
   resize: vertical;
+  transition: border-color 0.12s ease-out, box-shadow 0.12s ease-out;
 }
 textarea:focus {
   border-color: var(--m-color-primary);
+  box-shadow: inset 0 0 0 1px var(--m-color-primary);
 }
 
 /* ---- Chrome / Edge 自动填充修复 ----

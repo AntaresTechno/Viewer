@@ -9,7 +9,7 @@
     var(--m-color-background);
   padding: 24px;
 }
-/* md3 的毛玻璃与背景光斑样式统一放在 theme/design.css（需全局作用域） */
+/* md3e 的毛玻璃与背景光斑样式统一放在 theme/design.css（需全局作用域） */
 
 .panel {
   width: 380px;

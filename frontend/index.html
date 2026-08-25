@@ -7,11 +7,12 @@
     <title>Viewer · 阅读</title>
     <script>
       // 首帧前应用持久化的设计风格与明暗模式，避免主题闪烁。
+      // 历史 localStorage 值 "md3"（Material You）按 "md3e" 处理。
       (function () {
         try {
           var d = localStorage.getItem("viewer_design");
           document.documentElement.dataset.design =
-            d === "miuix" ? "miuix" : "md3";
+            d === "miuix" ? "miuix" : "md3e";
           var m = localStorage.getItem("viewer_theme_mode");
           if (m === "system") {
             m = window.matchMedia("(prefers-color-scheme: dark)").matches

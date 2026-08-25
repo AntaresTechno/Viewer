@@ -5,9 +5,10 @@ import { setTheme, setThemeMode, useTheme } from "miuix-vue";
 /**
  * 双设计系统主题 store。
  *
- * - design：整体设计语言（组件形状 / 字体 / 色板）
- *     - "miuix"  → miuix 原生 HyperOS 风（默认蓝 + 灰阶表面，16px 圆角，扁平）
- *     - "md3"    → Material Design 3（Google 蓝色调色板、药丸按钮、外描边输入框、卡片投影）
+ * - design：整体设计语言（组件形状 / 字体 / 色板 / 动效性格）
+ *     - "miuix"  → miuix 原生 HyperOS 风（默认蓝 + 灰阶表面，扁平、临界阻尼的克制动效）
+ *     - "md3e"   → Material Design 3 Expressive（高饱和色调色板、形状形变按钮、
+ *                  弹簧动效、大圆角卡片）
  * - mode：外观模式，交给 miuix-vue 内部状态驱动 `.m-theme-dark`：
  *     - "light" | "dark" | "system"
  *
@@ -15,7 +16,7 @@ import { setTheme, setThemeMode, useTheme } from "miuix-vue";
  * 由 theme/design.css 按 `html[data-design=…]` 作用域生效。
  */
 
-export type DesignId = "miuix" | "md3";
+export type DesignId = "miuix" | "md3e";
 export type ModeId = "light" | "dark" | "system";
 
 const DESIGN_KEY = "viewer_design";
@@ -23,7 +24,9 @@ const MODE_KEY = "viewer_theme_mode"; // 沿用历史 key，旧值 light/dark �
 
 function loadDesign(): DesignId {
   const v = localStorage.getItem(DESIGN_KEY);
-  return v === "miuix" || v === "md3" ? v : "md3";
+  // 历史值 "md3"（Material You）自动迁移为 "md3e"。
+  if (v === "md3") return "md3e";
+  return v === "miuix" || v === "md3e" ? v : "md3e";
 }
 
 function loadMode(): ModeId {

@@ -5,7 +5,7 @@
  * miuix-vue 0.1.x 的 MiuixInput 不支持 type="password"，因此这里
  * 手写同样的 DOM 结构并复用 miuix 的类名（.m-input / .m-input__label /
  * .m-input__field），让 miuix 与 design.css 里两套设计主题的输入框
- * 样式规则（填充底 / md3 外描边 / 聚焦环）自动作用于本组件，
+ * 样式规则（填充底 / md3e 外描边 / 聚焦环）自动作用于本组件，
  * 保证与用户名等其它输入框视觉完全一致。
  */
 import { computed, ref } from "vue";
@@ -84,7 +84,7 @@ function onInput(e: Event) {
   color: var(--m-color-primary);
 }
 
-/* miuix 填充式设计的聚焦反馈；md3 下由 design.css 的
+/* miuix 填充式设计的聚焦反馈；md3e 下由 design.css 的
    .m-input 描边覆盖（!important）接管，互不冲突。 */
 .pw-shell:focus-within {
   box-shadow: inset 0 0 0 2px var(--m-color-primary);

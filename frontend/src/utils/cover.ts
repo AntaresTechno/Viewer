@@ -1,6 +1,6 @@
 import { coverProxyUrl } from "@/api/client";
 
-/** 中性灰占位封面（miuix / md3 两种设计下都不突兀）。 */
+/** 中性灰占位封面（miuix / md3e 两种设计下都不突兀）。 */
 export const FALLBACK_COVER_SVG =
   "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='90' height='120'><rect width='100%25' height='100%25' rx='8' fill='%239aa7b8'/></svg>";
 

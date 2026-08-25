@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { MiuixTopAppBar, MiuixIconButton, useTheme as useMiuixTheme } from "miuix-vue";
 import { useAuth } from "@/stores/auth";
@@ -50,6 +50,72 @@ const items = computed(() =>
   nav.map((n) => ({ ...n, visible: n.show(), active: n.match(route.path) })),
 );
 
+/* ---- 导航滑块（sliding indicator）----
+ * 激活态背景不是每项各自淡入淡出，而是一整枚「滑块」沿导航条弹到目标项 ——
+ * 空间连续性：旧位置与新位置在视觉上被一条连续轨迹连接。
+ * 位置用 offsetLeft/offsetTop 测量（桌面竖排 / 移动横排同一套逻辑），
+ * 首次定位不播动画，之后路由切换、窗口尺寸变化都会平滑跟随。 */
+const navEl = ref<HTMLElement | null>(null);
+const itemEls = new Map<string, HTMLElement>();
+const thumb = ref({ x: 0, y: 0, w: 0, h: 0 });
+/** 首帧测量完成前禁用过渡，避免滑块从 (0,0) 飞入 */
+const thumbAnimated = ref(false);
+let measureRaf = 0;
+
+function setItemEl(to: string, el: unknown) {
+  if (el instanceof HTMLElement) itemEls.set(to, el);
+}
+
+function moveThumb() {
+  const target = items.value.find((i) => i.visible && i.active);
+  const el = target ? itemEls.get(target.to) : undefined;
+  if (!el) return;
+  thumb.value = {
+    x: el.offsetLeft,
+    y: el.offsetTop,
+    w: el.offsetWidth,
+    h: el.offsetHeight,
+  };
+}
+
+function scheduleThumbMeasure() {
+  cancelAnimationFrame(measureRaf);
+  measureRaf = requestAnimationFrame(() => moveThumb());
+}
+
+watch(
+  () => route.path,
+  () => void nextTick(scheduleThumbMeasure),
+);
+watch(items, () => void nextTick(scheduleThumbMeasure));
+
+let ro: ResizeObserver | null = null;
+onMounted(() => {
+  scheduleThumbMeasure();
+  // 等字体/布局稳定两帧后再开启过渡动画
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      thumbAnimated.value = true;
+    }),
+  );
+  window.addEventListener("resize", scheduleThumbMeasure);
+  if (navEl.value && typeof ResizeObserver !== "undefined") {
+    ro = new ResizeObserver(scheduleThumbMeasure);
+    ro.observe(navEl.value);
+  }
+});
+onBeforeUnmount(() => {
+  cancelAnimationFrame(measureRaf);
+  window.removeEventListener("resize", scheduleThumbMeasure);
+  ro?.disconnect();
+});
+
+const thumbStyle = computed(() => ({
+  transform: `translate(${thumb.value.x}px, ${thumb.value.y}px)`,
+  width: `${thumb.value.w}px`,
+  height: `${thumb.value.h}px`,
+}));
+
 /* ---- 外观弹层 ---- */
 const showAppearance = ref(false);
 const appearanceHost = ref<HTMLElement | null>(null);
@@ -90,11 +156,13 @@ function confirmLogout() {
 
 <template>
   <div class="shell">
-    <MiuixTopAppBar title="Viewer" subtitle="阅读 · 管理">
+    <!-- color="transparent"：关掉组件内联底色，玻璃材质由 design.css 的
+         .m-top-app-bar 规则提供（内容从半透明栏下穿过） -->
+    <MiuixTopAppBar title="Viewer" subtitle="阅读 · 管理" color="transparent">
       <template #actions>
         <div ref="appearanceHost" class="appearance-host">
           <MiuixIconButton
-            :title="`设计风格：${themeStore.design === 'md3' ? 'Material You' : 'Miuix'}`"
+            :title="`设计风格：${themeStore.design === 'md3e' ? 'Material 3 Expressive' : 'Miuix'}`"
             @click="toggleAppearance"
           >
             <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
@@ -140,12 +208,19 @@ function confirmLogout() {
           <div class="logo">V</div>
           <div class="brand-name">Viewer</div>
         </div>
-        <nav>
+        <nav ref="navEl" class="rail-nav">
+          <span
+            class="rail-thumb"
+            :class="{ anim: thumbAnimated }"
+            :style="thumbStyle"
+            aria-hidden="true"
+          ></span>
           <template v-for="(it, i) in items" :key="it.to + i">
             <button
               v-if="it.visible"
               class="rail-item"
               :class="{ active: it.active }"
+              :ref="(el) => setItemEl(it.to, el)"
               @click="router.push(it.to)"
             >
               <span class="pill">{{ it.label }}</span>
@@ -194,7 +269,7 @@ function confirmLogout() {
 }
 .rail {
   position: sticky;
-  top: 20px;
+  top: 64px; /* 让出半透明顶栏的高度，随页面一起停在栏下 */
   align-self: start;
   display: flex;
   flex-direction: column;
@@ -221,7 +296,37 @@ function confirmLogout() {
   font-weight: 600;
   color: var(--m-color-on-surface);
 }
+
+/* ---- 导航条 + 滑块 ---- */
+.rail-nav {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rail-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 999px;
+  background: var(--m-color-secondary-container);
+  pointer-events: none;
+  will-change: transform, width, height;
+}
+.rail-thumb.anim {
+  transition:
+    transform 0.55s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)),
+    width 0.55s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)),
+    height 0.55s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-thumb.anim {
+    transition: none;
+  }
+}
 .rail-item {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   border: 0;
@@ -236,13 +341,23 @@ function confirmLogout() {
   border-radius: 999px;
   color: var(--m-color-on-surface-secondary);
   font-size: 14px;
-  transition: background 0.15s ease;
+  background: transparent;
 }
-.rail-item:hover .pill {
-  background: var(--m-color-surface-container-high);
+@media (prefers-reduced-motion: no-preference) {
+  .rail-item .pill {
+    transition:
+      background 0.15s ease-out,
+      transform 0.35s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+  }
+  /* 悬停高亮只出现在未激活项上；激活项的高亮由滑块承担 */
+  .rail-item:not(.active):hover .pill {
+    background: var(--m-color-surface-container-high);
+  }
+  .rail-item:active .pill {
+    transform: scale(0.97);
+  }
 }
 .rail-item.active .pill {
-  background: var(--m-color-secondary-container);
   color: var(--m-color-on-secondary-container);
   font-weight: 600;
 }
@@ -282,7 +397,9 @@ function confirmLogout() {
   min-width: 0;
 }
 
-/* ---- 顶栏外观按钮 + 弹层 ---- */
+/* ---- 顶栏外观按钮 + 弹层 ----
+ * 玻璃材料：半透明面 + 背景模糊 + 顶部受光的细亮缘；
+ * transform-origin 锚定在触发按钮一侧，进出走同一条路径。 */
 .appearance-host {
   position: relative;
   display: inline-flex;
@@ -301,19 +418,48 @@ function confirmLogout() {
   min-width: 280px;
   padding: 16px;
   border-radius: 20px;
-  background: var(--m-color-surface-container);
-  box-shadow: var(--app-shadow-pop, 0 10px 32px rgba(0, 0, 0, 0.18));
+  background: color-mix(in srgb, var(--m-color-surface-container) 86%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    var(--app-shadow-pop, 0 10px 32px rgba(0, 0, 0, 0.18));
+  border: 1px solid color-mix(in srgb, var(--m-color-outline) 40%, transparent);
+  transform-origin: top right;
 }
-.pop-enter-active,
+@media (prefers-reduced-transparency: reduce) {
+  .appearance-pop {
+    background: var(--m-color-surface-container);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+/* 进出同路径：enter-from 与 leave-to 完全一致；
+ * 进入用弹簧（略带回弹），离开更快更收敛 —— 材料感与响应感并存。 */
+.pop-enter-active {
+  transition:
+    opacity 0.22s ease-out,
+    transform 0.45s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+}
 .pop-leave-active {
   transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
+    opacity 0.15s ease-in,
+    transform 0.18s ease-in;
 }
 .pop-enter-from,
 .pop-leave-to {
   opacity: 0;
-  transform: translateY(-4px) scale(0.98);
+  transform: translateY(-6px) scale(0.97);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pop-enter-active,
+  .pop-leave-active {
+    transition: opacity 0.15s ease;
+  }
+  .pop-enter-from,
+  .pop-leave-to {
+    transform: none;
+  }
 }
 
 @media (max-width: 760px) {
@@ -330,9 +476,8 @@ function confirmLogout() {
   .rail-footer {
     display: none;
   }
-  .rail nav {
-    display: flex;
-    gap: 6px;
+  .rail-nav {
+    flex-direction: row;
   }
   .rail-item {
     width: auto;
