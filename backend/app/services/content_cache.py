@@ -8,12 +8,16 @@ fetch on demand as before.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 
 from ..core.config import settings
 
-_MAX_ENTRIES = 40
+logger = logging.getLogger(__name__)
+
+# 预取每次开章会写入 N+1 条，40 条在连续阅读时会把未读的预取项过早挤出
+_MAX_ENTRIES = 200
 
 _cache: OrderedDict[str, str] = OrderedDict()
 _lock = asyncio.Lock()
@@ -100,6 +104,8 @@ async def spawn_prefetch(key: str, factory: Callable[[], Awaitable[str]]) -> boo
             if not fut.done():
                 fut.set_result(text)
         except Exception as exc:  # noqa: BLE001 - prefetch best-effort
+            logger.warning("prefetch failed (url=%s): %s: %s",
+                           key.split("\x1f")[1], type(exc).__name__, exc)
             if not fut.done():
                 fut.set_exception(exc)
         finally:

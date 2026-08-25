@@ -8,12 +8,17 @@ page / java.ajax call, which dominates latency against slow book sites.
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 from dataclasses import dataclass, field
 
 import httpx
 
 from ..core.config import settings
+
+# <meta charset="utf8"> / content="text/html; charset=GBK" 一类的声明
+# （兼容无连字符的 utf8 写法与引号/空白变体）。
+_CHARSET_DECL_RE = re.compile(r'charset\s*=\s*["\']?\s*([a-zA-Z0-9_-]+)')
 
 _HTTP_LIMITS = httpx.Limits(
     max_connections=64,
@@ -76,27 +81,52 @@ class StrResponse:
 
 
 def decode_body(content: bytes, charset: str | None = None) -> str:
-    """Decode response bytes: explicit charset > meta charset > utf-8 > gb18030."""
+    """Decode response bytes to text.
+
+    优先级：书源显式 charset > 页面声明的 charset > 严格 utf-8 /
+    gb18030 / big5 > 「主体 utf-8」容错解码 > gb18030 容错解码。
+
+    关键原则：绝不允许「整页只有个别非法字节」就把全部内容按
+    latin-1 重解 —— 那会把 99.9% 正确的中文变成 å±±æä¹¡ 式的
+    全页乱码（真实案例：deqixs 页面模板混入一个非法字节，导致
+    发现页所有书名作者全部乱码）。utf-8 替换符占比极小时，页面
+    本质就是 utf-8，脏字节只该影响它自己那一个字符。
+    """
+    if not content:
+        return ""
     if charset:
         try:
             return content.decode(charset, "replace")
         except LookupError:
             pass
+
     head = content[:2048].decode("ascii", "ignore").lower()
-    for probe in ("charset=gb2312", "charset=gbk", "charset=gb18030", "charset=utf-8"):
-        if probe in head:
-            enc = probe.split("=")[1]
-            try:
-                return content.decode(enc, "replace")
-            except LookupError:
-                break
-    try:
-        return content.decode("utf-8")
-    except UnicodeDecodeError:
+    declared = _CHARSET_DECL_RE.search(head)
+    if declared:
+        enc = declared.group(1)
         try:
-            return content.decode("gb18030")
+            text = content.decode(enc, "replace")
+        except LookupError:
+            pass
+        else:
+            # 声明也可能撒谎（声明 gbk 实发 utf-8 等）：坏字符占比过高
+            # 说明声明不可信，继续走自动探测。
+            if text.count("\ufffd") <= len(content) / 50:
+                return text
+
+    for enc in ("utf-8", "gb18030", "big5"):
+        try:
+            return content.decode(enc)
         except UnicodeDecodeError:
-            return content.decode("latin-1", "replace")
+            continue
+
+    # 全部严格失败：按「主体编码」容错解码。utf-8 替换符占比
+    # ≤0.5% 即认定页面本质是 utf-8（脏字节只损失它自己）；否则
+    # 视为 GBK 系页面做容错解码。
+    u_text = content.decode("utf-8", "replace")
+    if u_text.count("\ufffd") <= len(content) / 200:
+        return u_text
+    return content.decode("gb18030", "replace")
 
 
 def _merge_headers(headers: dict[str, str] | None) -> dict[str, str]:

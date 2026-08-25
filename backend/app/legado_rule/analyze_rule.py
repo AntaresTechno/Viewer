@@ -14,7 +14,7 @@ from .analyzer_regex import get_elements as regex_get_elements
 from .analyzer_xpath import AnalyzeByXPath
 from .analyze_url import get_absolute_url
 from .exceptions import RuleError
-from .js_bridge import JavaBridge, detect_engine, eval_js
+from .js_bridge import JavaBridge, JsEvaluator, detect_engine
 from .rule_analyzer import RuleAnalyzer
 
 JS_PATTERN = re.compile(r"<js>([\w\W]*?)</js>|@js:([\w\W]*)", re.IGNORECASE)
@@ -175,6 +175,11 @@ class AnalyzeRule:
         self._string_cache: dict[str, list[SourceRule]] = {}
         self._cache_lock = threading.Lock()
         self.bridge = JavaBridge(owner=self, base_url=self.base_url)
+        # JS 求值器按实例复用：构造一次 quickjs/dukpy 运行时（含桥接注册
+        # 与书源 jsLib 执行），后续每次 @js: 只更新 result 变量再求值。
+        # 旧实现每次 eval 都重建运行时，一页列表几十次求值时开销占绝对
+        # 大头。绑定中的 book/baseUrl 等在解析生命周期内视为静态。
+        self._js_evaluator: JsEvaluator | None = None
 
     # --------------------------------------------------------------- set up
     def set_content(self, content: Any, base_url: str | None = None) -> "AnalyzeRule":
@@ -343,7 +348,11 @@ class AnalyzeRule:
     def eval_js(self, js_code: str, result: Any = None) -> Any:
         if detect_engine() is None:
             raise RuleError("未安装 quickjs，无法执行书源中的 JS 规则（pip install quickjs）")
-        return eval_js(js_code, self._eval_bindings(result))
+        ev = self._js_evaluator
+        if ev is None:
+            ev = self._js_evaluator = JsEvaluator(self._eval_bindings(None))
+        ev.set_binding("result", result)
+        return ev.eval(js_code)
 
     # -------------------------------------------------------------- results
     def get_string(self, rule_str: str | None, m_content: Any = None,
@@ -538,6 +547,12 @@ def _to_str(obj: Any) -> str:
         return str(int(obj))
     if isinstance(obj, bytes):
         return obj.decode("utf-8", "replace")
+    # lxml 元素：与旧 bs4 行为一致，str(元素) 应得到其外层 HTML，
+    # 而不是 "<Element div at 0x...>" 这样的对象描述。
+    from .analyzer_css import HTML_ELEMENT, _outer_html
+
+    if isinstance(obj, HTML_ELEMENT):
+        return _outer_html(obj)
     if isinstance(obj, (dict, list)):
         try:
             return json.dumps(obj, ensure_ascii=False)

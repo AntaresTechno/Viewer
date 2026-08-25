@@ -31,6 +31,16 @@
   .m-card-wrapper:nth-child(5) { animation-delay: 0.16s; }
   .m-card-wrapper:nth-child(n + 6) { animation-delay: 0.2s; }
 
+  /* 封面瓷砖入场（同容器错开，弹簧收敛） */
+  .ctile {
+    animation: rise-in 0.5s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)) both;
+  }
+  .ctile:nth-child(2) { animation-delay: 0.03s; }
+  .ctile:nth-child(3) { animation-delay: 0.06s; }
+  .ctile:nth-child(4) { animation-delay: 0.09s; }
+  .ctile:nth-child(5) { animation-delay: 0.12s; }
+  .ctile:nth-child(n + 6) { animation-delay: 0.15s; }
+
   /* 可点击卡片：悬浮上浮（弹簧），按下即时回落 —— 悬浮态与按压态
    * 连续过渡，中途移开/按下都不会跳变。 */
   .entry > .m-card,
@@ -51,6 +61,11 @@
   .stat:active > .m-card {
     transform: translateY(-1px) scale(0.985);
     transition-duration: 0.12s;
+  }
+
+  /* 空态：一次性轻浮入（与卡片同款弹簧），不再硬邦邦地直接出现 */
+  .empty-state {
+    animation: rise-in 0.45s var(--app-ease-calm, cubic-bezier(0.22, 0.61, 0.36, 1)) both;
   }
 }
 
@@ -252,6 +267,171 @@ textarea {
 textarea:focus {
   border-color: var(--m-color-primary);
   box-shadow: inset 0 0 0 1px var(--m-color-primary);
+}
+
+/* ---- 页面头（标题块 + 右侧动作） ----
+ * 每页唯一的 H1 级入口：大标题靠排版而非色块建立层级。 */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.page-head .page-title {
+  margin: 0;
+}
+.page-sub {
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--m-color-on-background-variant);
+}
+
+/* ---- 封面瓷砖网格（书架 / 搜索结果 / 发现共用） ----
+ * 书即界面：封面是第一视觉，文字退居其下。
+ * 瓷砖本体是 <button class="ctile">，键盘可达。 */
+.cover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(146px, 1fr));
+  gap: 20px 14px;
+}
+.ctile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  min-width: 0;
+}
+.ctile-cover {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--m-color-surface-container-high);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.1),
+    0 8px 20px -10px rgba(0, 0, 0, 0.28);
+}
+.ctile-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ctile-cover {
+    transition:
+      transform 0.45s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)),
+      box-shadow 0.25s ease;
+  }
+  .ctile:hover .ctile-cover,
+  .ctile:focus-visible .ctile-cover {
+    transform: translateY(-4px);
+    box-shadow:
+      0 2px 4px rgba(0, 0, 0, 0.1),
+      0 14px 28px -10px rgba(0, 0, 0, 0.32);
+  }
+  .ctile:active .ctile-cover {
+    transform: translateY(-1px) scale(0.98);
+    transition-duration: 0.12s;
+  }
+}
+/* 标题只占一行，超出省略 —— 与首页/书架统一的卡片信息层级：
+ * 一行标题 → 进度 → 作者 */
+.ctile-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--m-color-on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctile-meta {
+  font-size: 12px;
+  color: var(--m-color-on-surface-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctile-sub {
+  font-size: 11px;
+  color: var(--m-color-on-background-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 瓷砖角标：目录抓取状态等覆盖在封面左上 */
+.ctile-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--m-color-surface) 82%, transparent);
+  color: var(--m-color-on-surface);
+  pointer-events: none;
+}
+.ctile-badge.err {
+  background: color-mix(in srgb, var(--m-color-error) 88%, transparent);
+  color: var(--m-color-on-error);
+}
+
+/* 瓷砖底部细进度条（阅读进度） */
+.ctile-progress {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--m-color-surface-container-highest);
+  overflow: hidden;
+}
+.ctile-progress > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--m-color-primary);
+}
+
+/* ---- 空态 ---- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 72px 24px;
+  text-align: center;
+  color: var(--m-color-on-background-variant);
+  font-size: 13.5px;
+}
+.empty-state .es-icon {
+  width: 46px;
+  height: 46px;
+  color: var(--m-color-outline);
+  margin-bottom: 4px;
+}
+.empty-state .es-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.empty-state .es-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--m-color-on-surface);
+}
+.empty-state .es-act {
+  margin-top: 10px;
 }
 
 /* ---- Chrome / Edge 自动填充修复 ----

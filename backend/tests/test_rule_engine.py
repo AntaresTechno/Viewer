@@ -8,6 +8,7 @@ import pytest
 
 from app.legado_rule.analyze_rule import AnalyzeRule
 from app.legado_rule.analyze_url import AnalyzeUrl
+from app.legado_rule.analyzer_css import AnalyzeByJSoup
 from app.legado_rule.analyzer_regex import get_elements as regex_get_elements
 from app.legado_rule.rule_analyzer import RuleAnalyzer
 
@@ -96,6 +97,18 @@ class TestJSoup:
         ar = make_ar(HTML)
         els = ar.get_elements("div.bookbox")
         assert len(els) == 3
+
+    def test_text_contains_rule(self):
+        """text.x 规则（ElementsSingle._containing_own_text 路径）。"""
+        ar = make_ar(HTML)
+        els = ar.get_elements("class.bookbox@tag.h4@text.斗")
+        assert len(els) == 1
+        ar.set_content(els[0])
+        assert ar.get_string("tag.a@text") == "斗破苍穹"
+
+        # 直接在文档级使用：包含关键字的元素自身
+        got = AnalyzeByJSoup(HTML).get_elements("text.蒸汽与机械")
+        assert len(got) == 1
 
     def test_bracket_range_and_exclude(self):
         html = "<i>1</i><i>2</i><i>3</i><i>4</i>"

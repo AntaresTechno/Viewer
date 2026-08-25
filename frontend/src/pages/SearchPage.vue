@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { MiuixButton, MiuixCard, MiuixProgressIndicator, MiuixText } from "miuix-vue";
+import { MiuixButton, MiuixProgressIndicator } from "miuix-vue";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import type { BookResult, SourceRow } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import { collectGroups, splitGroups } from "@/utils/sourceGroups";
+import { openDetail } from "@/utils/reader";
 
 const router = useRouter();
 
 const key = ref("");
 const sources = ref<SourceRow[]>([]);
 const selected = ref<number[]>([]);
+/** 当前浏览的分组；空串 = 全部分组。 */
+const activeGroup = ref("");
 const results = ref<BookResult[]>([]);
 const errors = ref<{ message: string; originName?: string }[]>([]);
 const searching = ref(false);
@@ -26,33 +30,52 @@ onMounted(async () => {
   }
 });
 
+const groups = computed(() => collectGroups(sources.value));
+
+const visibleSources = computed(() =>
+  activeGroup.value
+    ? sources.value.filter((s) =>
+        splitGroups(s.sourceGroup).includes(activeGroup.value),
+      )
+    : sources.value,
+);
+
+function pickGroup(g: string) {
+  if (activeGroup.value === g) return;
+  activeGroup.value = g;
+  selected.value = []; // 切换分组后回到「本组全部」语义
+}
+
+/** 搜索范围：显式勾选 > 当前分组的全部源 > 全部来源（undefined）。 */
+function scopeIds(): number[] | undefined {
+  if (selected.value.length) return selected.value;
+  if (
+    activeGroup.value &&
+    visibleSources.value.length > 0 &&
+    visibleSources.value.length < sources.value.length
+  )
+    return visibleSources.value.map((s) => s.id);
+  return undefined;
+}
+
 function toggleSource(id: number) {
   const i = selected.value.indexOf(id);
   if (i >= 0) selected.value.splice(i, 1);
   else selected.value.push(id);
 }
 
-/** 打开详情页：先把搜索结果 reseolve 成书籍档案（写入缓存），再跳短链。 */
-async function openBook(it: BookResult) {
-  try {
-    const ref = await api.resolveBook({
-      sourceUrl: it.origin,
-      bookUrl: it.bookUrl,
-      name: it.name,
-      author: it.author ?? "",
-      coverUrl: it.coverUrl ?? "",
-      intro: it.intro ?? "",
-      kind: it.kind ?? "",
-      lastChapter: it.lastChapter ?? "",
-      tocUrl: "",
-    });
-    router.push(`/book/ref/${ref.id}`);
-  } catch {
-    // 解析失败退回长 URL（详情页仍会用 bookProfile 缓存兜底）
-    router.push(
-      `/book/${encodeURIComponent(it.bookUrl)}?origin=${encodeURIComponent(it.origin)}&name=${encodeURIComponent(it.name)}&author=${encodeURIComponent(it.author ?? "")}&cover=${encodeURIComponent(it.coverUrl ?? "")}`,
-    );
-  }
+/** 打开详情页：统一入口（解析成书籍档案后跳短链 /book/ref/:id）。 */
+function openBook(it: BookResult) {
+  void openDetail(router, {
+    sourceUrl: it.origin,
+    bookUrl: it.bookUrl,
+    name: it.name,
+    author: it.author ?? "",
+    coverUrl: it.coverUrl ?? "",
+    intro: it.intro ?? "",
+    kind: it.kind ?? "",
+    lastChapter: it.lastChapter ?? "",
+  });
 }
 
 async function doSearch() {
@@ -60,11 +83,7 @@ async function doSearch() {
   searching.value = true;
   searchedKey.value = key.value.trim();
   try {
-    const r = await api.searchBooks(
-      key.value,
-      1,
-      selected.value.length === sources.value.length ? undefined : selected.value,
-    );
+    const r = await api.searchBooks(key.value, 1, scopeIds());
     // dedupe by name+author across sources
     const seen = new Set<string>();
     results.value = r.items.filter((it) => {
@@ -84,7 +103,12 @@ async function doSearch() {
 
 <template>
   <div>
-    <h2 class="page-title">搜索</h2>
+    <div class="page-head">
+      <div>
+        <h2 class="page-title">搜索</h2>
+        <p class="page-sub">跨书源聚合搜索，同名书目自动去重</p>
+      </div>
+    </div>
 
     <form class="search-row" @submit.prevent="doSearch">
       <input
@@ -98,14 +122,29 @@ async function doSearch() {
       </MiuixButton>
     </form>
 
+    <div v-if="groups.length" class="src-row grp-row" role="group" aria-label="书源分组">
+      <button
+        class="chip"
+        :class="{ selected: !activeGroup }"
+        @click="pickGroup('')"
+      >全部分组</button>
+      <button
+        v-for="g in groups"
+        :key="g.name"
+        class="chip"
+        :class="{ selected: activeGroup === g.name }"
+        @click="pickGroup(g.name)"
+      >{{ g.name }}<span class="g-count">{{ g.count }}</span></button>
+    </div>
+
     <div class="src-row">
       <button
         class="chip"
         :class="{ selected: !selected.length }"
         @click="selected = []"
-      >全部来源</button>
+      >{{ activeGroup ? `本组全部（${visibleSources.length}）` : "全部来源" }}</button>
       <button
-        v-for="s in sources"
+        v-for="s in visibleSources"
         :key="s.id"
         class="chip"
         :class="{ selected: selected.includes(s.id) }"
@@ -123,35 +162,39 @@ async function doSearch() {
       {{ errors.slice(0, 3).map((e) => `${e.originName ?? ""} ${e.message}`).join("；") }}
     </div>
 
-    <div class="result-grid">
-      <MiuixCard
+    <div class="cover-grid">
+      <button
         v-for="(it, i) in results"
         :key="i"
-        class="book-card"
+        type="button"
+        class="ctile"
         @click="openBook(it)"
       >
-        <img
-          class="cover"
-          :src="it.coverUrl ? coverProxyUrl(it.coverUrl) : FALLBACK_COVER_SVG"
-          loading="lazy"
-          @error="onCoverError($event, it.coverUrl)"
-        >
-        </img>
-        <div class="info">
-          <MiuixText type="title4">{{ it.name }}</MiuixText>
-          <div class="meta">{{ it.author }}</div>
-          <div v-if="it.kind" class="kinds">{{ it.kind }}</div>
-          <div class="intro">{{ it.intro }}</div>
-          <div class="last">{{ it.lastChapter }}</div>
-        </div>
-      </MiuixCard>
+        <span class="ctile-cover">
+          <img
+            :src="it.coverUrl ? coverProxyUrl(it.coverUrl) : FALLBACK_COVER_SVG"
+            loading="lazy"
+            @error="onCoverError($event, it.coverUrl)"
+          >
+        </span>
+        <span class="ctile-name">{{ it.name }}</span>
+        <span class="ctile-meta">{{ it.author || "佚名" }}</span>
+        <span v-if="it.kind" class="ctile-sub">{{ it.kind }}</span>
+      </button>
     </div>
 
     <div
       v-if="!searching && searchedKey && !results.length"
-      class="center empty"
+      class="empty-state"
     >
-      「{{ searchedKey }}」没有结果。
+      <span class="es-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"
+             stroke-linecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.25"/><path d="m15.8 15.8 4.2 4.2"/>
+        </svg>
+      </span>
+      <span class="es-title">「{{ searchedKey }}」没有结果</span>
+      <span>换个关键词，或勾选更多书源再试。</span>
     </div>
   </div>
 </template>
@@ -181,6 +224,15 @@ async function doSearch() {
   gap: 8px;
   margin-bottom: 18px;
 }
+/* 分组行紧跟来源行上方，间距收紧 */
+.grp-row {
+  margin-bottom: 8px;
+}
+.g-count {
+  margin-left: 5px;
+  font-size: 11px;
+  opacity: 0.55;
+}
 .none-src {
   color: var(--m-color-on-background-variant);
   font-size: 13px;
@@ -189,53 +241,5 @@ async function doSearch() {
   color: var(--m-color-error);
   font-size: 12px;
   margin-bottom: 10px;
-}
-.result-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
-}
-.book-card {
-  cursor: pointer;
-}
-.book-card :deep(.m-card) {
-  flex-direction: row;
-  gap: 12px;
-}
-.cover {
-  width: 84px;
-  height: 112px;
-  object-fit: cover;
-  border-radius: 10px;
-  background: var(--m-color-surface-container-high);
-  flex: none;
-}
-.info {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.meta {
-  font-size: 13px;
-  color: var(--m-color-on-surface-secondary);
-}
-.kinds {
-  font-size: 11px;
-  color: var(--m-color-primary);
-}
-.intro {
-  font-size: 12px;
-  color: var(--m-color-on-background-variant);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.last {
-  margin-top: auto;
-  font-size: 11px;
-  color: var(--m-color-outline);
 }
 </style>

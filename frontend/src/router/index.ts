@@ -10,7 +10,9 @@ const router = createRouter({
       path: "/",
       component: () => import("@/layouts/AppShell.vue"),
       children: [
+        // 打开网站默认进书架；「首页」是侧栏里的独立选项卡 /home
         { path: "", redirect: "/shelf" },
+        { path: "home", component: () => import("@/pages/HomePage.vue") },
         { path: "shelf", component: () => import("@/pages/ShelfPage.vue") },
         { path: "search", component: () => import("@/pages/SearchPage.vue") },
         { path: "explore", component: () => import("@/pages/ExplorePage.vue") },
@@ -29,6 +31,16 @@ const router = createRouter({
         {
           path: "replace",
           component: () => import("@/pages/ReplaceRulesPage.vue"),
+        },
+        {
+          // 正文净化插件：规则包 / 缓存 / 测试
+          path: "purify",
+          component: () => import("@/pages/PurifyPage.vue"),
+        },
+        {
+          // WebDAV 备份插件：配置 / 备份 / 恢复
+          path: "webdav",
+          component: () => import("@/pages/WebDavPage.vue"),
         },
         { path: "me", component: () => import("@/pages/MePage.vue") },
         {

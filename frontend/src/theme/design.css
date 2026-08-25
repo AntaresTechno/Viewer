@@ -141,8 +141,11 @@ html[data-design="md3e"] {
   /* M3E 卡片：贴近 surface 的低对比色调，靠大圆角与投影分层 */
   --m-card-color: #f5f7fd;
 
-  /* app 级形状刻度（M3E 加大了圆角上限） */
+  /* app 级形状刻度（M3E 加大了圆角上限）；字体以小米 MiSans 为先 */
   --app-font:
+    "MiSans",
+    "MiSans VF",
+    "HarmonyOS Sans SC",
     "Roboto",
     "Segoe UI",
     system-ui,

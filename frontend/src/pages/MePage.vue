@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import {
   MiuixButton,
   MiuixCard,
   MiuixInput,
   MiuixText,
-  MiuixDivider,
   MiuixSlider,
 } from "miuix-vue";
 import PasswordField from "@/components/PasswordField.vue";
@@ -14,6 +14,7 @@ import { useAuth } from "@/stores/auth";
 import { api, errMsg } from "@/api/client";
 
 const auth = useAuth();
+const $router = useRouter();
 
 const displayName = ref(auth.user?.display_name ?? "");
 const email = ref(auth.user?.email ?? "");
@@ -60,15 +61,24 @@ async function savePassword() {
     pwError.value = errMsg(e);
   }
 }
+
+function logout() {
+  if (!confirm("确定退出登录？")) return;
+  auth.logout();
+  $router.push("/login");
+}
 </script>
 
 <template>
   <div class="page-me">
-    <MiuixCard class="card" :show-indication="false">
-      <h3>外观</h3>
-      <AppearancePanel />
-    </MiuixCard>
+    <div class="page-head">
+      <div>
+        <h2 class="page-title">我的</h2>
+        <p class="page-sub">账户、外观与安全设置</p>
+      </div>
+    </div>
 
+    <!-- 身份 -->
     <MiuixCard class="card" :show-indication="false">
       <div class="head">
         <div
@@ -84,14 +94,14 @@ async function savePassword() {
             <span v-if="auth.isSuperuser" class="tag">超级管理员</span>
           </div>
           <div v-if="auth.user?.created_at" class="joined">
-            注册于 {{ auth.user.created_at.slice(0, 10) }} · 书架
-            {{ auth.user?.shelf_count ?? 0 }} 本
+            注册于 {{ auth.user.created_at.slice(0, 10) }} · 书架 {{ auth.user?.shelf_count ?? 0 }} 本
           </div>
         </div>
       </div>
+    </MiuixCard>
 
-      <MiuixDivider />
-
+    <!-- 资料 -->
+    <MiuixCard class="card" :show-indication="false">
       <h3>资料</h3>
       <div class="grid">
         <label>昵称<MiuixInput v-model="displayName" single-line /></label>
@@ -110,6 +120,13 @@ async function savePassword() {
       </div>
     </MiuixCard>
 
+    <!-- 外观 -->
+    <MiuixCard class="card" :show-indication="false">
+      <h3>外观</h3>
+      <AppearancePanel />
+    </MiuixCard>
+
+    <!-- 安全 -->
     <MiuixCard class="card" :show-indication="false">
       <h3>修改密码</h3>
       <div class="col">
@@ -123,6 +140,7 @@ async function savePassword() {
       </div>
     </MiuixCard>
 
+    <!-- 更多 -->
     <MiuixCard
       v-if="auth.can('books.replace.read')"
       class="card link-card"
@@ -137,13 +155,31 @@ async function savePassword() {
         <span class="arrow">›</span>
       </div>
     </MiuixCard>
+
+    <!-- 正文净化插件 -->
+    <MiuixCard
+      v-if="auth.can('purify.read')"
+      class="card link-card"
+      :show-indication="false"
+      @click="$router.push('/purify')"
+    >
+      <div class="link-row">
+        <div>
+          <h3 style="margin: 0">正文净化</h3>
+          <p class="sub">规则包（预设 / 乌云净化类导入）· 净化缓存 · 试一试</p>
+        </div>
+        <span class="arrow">›</span>
+      </div>
+    </MiuixCard>
+
+    <!-- 危险区：移动端底部标签栏没有退出入口，这里兜底所有端 -->
+    <button type="button" class="logout-row" @click="logout">退出登录</button>
   </div>
 </template>
 
 <style scoped>
 .page-me {
-  display: grid;
-  gap: 20px;
+  max-width: 720px;
 }
 .card {
   /* 内边距经变量传入内层可见卡片（MiuixCard 结构） */
@@ -165,7 +201,6 @@ async function savePassword() {
   display: flex;
   gap: 16px;
   align-items: center;
-  margin-bottom: 14px;
 }
 .big-avatar {
   width: 64px;
@@ -176,6 +211,7 @@ async function savePassword() {
   font-weight: 800;
   display: grid;
   place-items: center;
+  flex: none;
 }
 .sub {
   color: var(--m-color-on-surface-secondary);
@@ -198,12 +234,20 @@ h3 {
   margin: 14px 0 10px;
   font-size: 15px;
 }
+.card h3:first-of-type {
+  margin-top: 0;
+}
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   font-size: 13px;
   color: var(--m-color-on-surface-secondary);
+}
+@media (max-width: 560px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
 }
 .bio-label {
   display: block;
@@ -237,5 +281,27 @@ textarea {
   flex-direction: column;
   gap: 12px;
   max-width: 360px;
+}
+
+/* 退出登录：整行幽灵按钮，悬停/按压染错误色 */
+.logout-row {
+  width: 100%;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--m-color-error) 35%, transparent);
+  border-radius: var(--app-radius-input, 12px);
+  background: transparent;
+  color: var(--m-color-error);
+  font-size: 14px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease-out;
+}
+.logout-row:hover {
+  background: color-mix(in srgb, var(--m-color-error) 8%, transparent);
+}
+.logout-row:active {
+  opacity: 0.7;
 }
 </style>

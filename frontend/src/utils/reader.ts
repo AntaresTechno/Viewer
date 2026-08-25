@@ -15,7 +15,8 @@ export interface ReaderTarget {
   tocUrl?: string;
 }
 
-export function detailRoute(t: ReaderTarget): string {
+/** 长参数详情路由：仅作 resolve 失败时的兜底。 */
+function detailRoute(t: ReaderTarget): string {
   const q = new URLSearchParams({
     origin: t.sourceUrl,
     name: t.name,
@@ -25,19 +26,36 @@ export function detailRoute(t: ReaderTarget): string {
   return `/book/${encodeURIComponent(t.bookUrl)}?${q.toString()}`;
 }
 
+/** /books/resolve 的入参：把已知信息写入书籍短链档案（get-or-create）。 */
+function resolvePayload(t: ReaderTarget) {
+  return {
+    sourceUrl: t.sourceUrl,
+    bookUrl: t.bookUrl,
+    name: t.name,
+    author: t.author ?? "",
+    coverUrl: t.coverUrl ?? "",
+    intro: t.intro ?? "",
+    kind: t.kind ?? "",
+    lastChapter: t.lastChapter ?? "",
+    tocUrl: t.tocUrl ?? "",
+  };
+}
+
+/** 详情页统一入口：解析书籍档案后跳短链 /book/ref/:id。
+ * 书架/搜索/发现/本地库/阅读器全部经此进入，URL 只保留短链一种形态。 */
+export async function openDetail(router: Router, t: ReaderTarget): Promise<void> {
+  try {
+    const ref = await api.resolveBook(resolvePayload(t));
+    await router.push(`/book/ref/${ref.id}`);
+  } catch {
+    // 后端不可达时退回长参数方式，详情页仍会用 bookProfile 缓存兜底
+    await router.push(detailRoute(t));
+  }
+}
+
 export async function openReader(router: Router, t: ReaderTarget): Promise<void> {
   try {
-    const ref = await api.resolveBook({
-      sourceUrl: t.sourceUrl,
-      bookUrl: t.bookUrl,
-      name: t.name,
-      author: t.author ?? "",
-      coverUrl: t.coverUrl ?? "",
-      intro: t.intro ?? "",
-      kind: t.kind ?? "",
-      lastChapter: t.lastChapter ?? "",
-      tocUrl: t.tocUrl ?? "",
-    });
+    const ref = await api.resolveBook(resolvePayload(t));
     await router.push(`/reader?id=${ref.id}`);
   } catch {
     // 解析失败退回长参数方式，阅读器页自己也会兜底重试

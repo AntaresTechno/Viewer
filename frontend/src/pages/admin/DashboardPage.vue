@@ -70,7 +70,7 @@ const cards = [
       </MiuixCard>
 
       <p v-if="auth.isSuperuser" class="tip">
-        提示：插件启停与书源管理在左侧「管理」分区。
+        提示：插件启停与书源管理在「管理」分区。
       </p>
     </template>
     <div v-else class="center">{{ error || "无法加载" }}</div>

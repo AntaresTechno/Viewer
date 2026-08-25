@@ -1,63 +1,140 @@
-"""Port of AnalyzeByJSoup.kt — legado's mini HTML selector grammar."""
+"""Port of AnalyzeByJSoup.kt — legado's mini HTML selector grammar.
+
+Engine: raw lxml.html（不再经 BeautifulSoup 包装）。BS4 会把每个节点包成
+Python 对象、soupsieve 用纯 Python 求值选择器，两者曾占页面解析耗时的
+绝大部分；改为 lxml 后树在 C 层遍历、CSS 选择器编译为 XPath 在 libxml2
+内求值（带 LRU 编译缓存），典型解析提速数倍。对外的类名、方法签名与
+legado 规则语义保持完全一致。
+"""
 from __future__ import annotations
 
 import copy
 import re
+from functools import lru_cache
 from typing import Any
 
-from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+from lxml import etree
+from lxml import html as lhtml
+
+# 任意 lxml 树节点（元素/注释/PI 都是其子类）。
+_ELEMENT = etree._Element
+# 公开别名：供 analyze_rule 等模块做 isinstance 判断。
+HTML_ELEMENT = etree._Element
 
 
-def parse_doc(doc: Any) -> Tag:
-    if isinstance(doc, Tag):
+def parse_doc(doc: Any):
+    """Parse HTML/XML text into an lxml container element (idempotent)."""
+    if isinstance(doc, _ELEMENT):
         return doc
     text = doc if isinstance(doc, str) else str(doc)
-    if text.lstrip().lower().startswith("<?xml"):
-        return BeautifulSoup(text, "html.parser")
+    if not text.strip():
+        return etree.Element("div")
+
+    stripped = text.lstrip()
+    if stripped[:5].lower() == "<?xml":
+        # XML 文档（RSS 等）：用 XML 解析器的容错模式包一层容器，
+        # 保持「容器元素」语义与旧实现一致。
+        try:
+            root = etree.fromstring(stripped.encode("utf-8"),
+                                    etree.XMLParser(recover=True))
+            wrap = etree.Element("div")
+            if isinstance(root, _ELEMENT):
+                wrap.append(root)
+            return wrap
+        except Exception:  # noqa: BLE001 - 落回 HTML 宽松解析
+            pass
     try:
-        return BeautifulSoup(text, "lxml")
-    except Exception:  # noqa: BLE001 - lxml unavailable
-        return BeautifulSoup(text, "html.parser")
+        return lhtml.document_fromstring(text)
+    except Exception:  # noqa: BLE001 - 极端残缺页面兜底为空容器
+        return etree.Element("div")
 
 
-def _children(el: Tag) -> list[Tag]:
-    return [c for c in el.children if isinstance(c, Tag)]
+# --------------------------------------------------------------- selectors
+@lru_cache(maxsize=512)
+def _compile_css(selector: str):
+    from lxml.cssselect import CSSSelector
+
+    return CSSSelector(selector, translator="html")
 
 
-def _own_text(el: Tag) -> str:
+@lru_cache(maxsize=512)
+def _class_xpath(arg: str):
+    return etree.XPath(
+        f'descendant-or-self::*[contains(concat(" ", normalize-space(@class), " "),'
+        f' "{arg}")]'
+    )
+
+
+def _css_select(scope, selector: str) -> list:
+    """Equivalent of bs4's Tag.select：只搜子孙、不含自身。"""
+    return [r for r in _compile_css(selector)(scope) if r is not scope]
+
+
+# ------------------------------------------------------------------ helpers
+def _is_el(node: Any) -> bool:
+    """真元素节点（注释/PI 的 tag 是可调用对象）。"""
+    return isinstance(getattr(node, "tag", None), str)
+
+
+def _children(el) -> list:
+    return [c for c in el if _is_el(c)]
+
+
+def _child_strings(el) -> list[str]:
+    """直接挂在 el 下的文本（不含子孙、不含注释体），等价于 bs4 的
+    直接子 NavigableString 集合。"""
+    out = []
+    t = el.text
+    if t and t.strip():
+        out.append(t.strip())
+    for c in el:
+        t = c.tail
+        if t and t.strip():
+            out.append(t.strip())
+    return out
+
+
+def _own_text(el) -> str:
+    return " ".join(_child_strings(el))
+
+
+def _text(el) -> str:
+    return " ".join(el.text_content().split())
+
+
+def _data(el) -> str:
     parts = []
-    for c in el.children:
-        if isinstance(c, NavigableString) and not isinstance(c, Comment):
-            t = str(c).strip()
-            if t:
-                parts.append(t)
-    return " ".join(parts)
+    for d in el.iter():
+        if _is_el(d) and d.tag in ("script", "style"):
+            s = d.text_content().strip()
+            if s:
+                parts.append(s)
+    return "\n".join(parts)
 
 
-def _text(el: Tag) -> str:
-    return " ".join(el.get_text().split())
-
-
-def _data(el: Tag) -> str:
-    parts = []
-    for c in el.descendants:
-        if isinstance(c, Tag) and c.name in ("script", "style") and c.string:
-            parts.append(str(c.string))
-    joined = "\n".join(p.strip() for p in parts if p.strip())
-    return joined
-
-
-def _outer_html(el: Tag, drop_script_style: bool = False) -> str:
-    node = copy.copy(el)
+def _outer_html(el, drop_script_style: bool = False) -> str:
+    node = copy.deepcopy(el)
+    node.tail = None  # tostring 会带上尾随文本，bs4 的 decode() 不含 tail
     if drop_script_style:
-        for bad in node.find_all(["script", "style"]):
-            bad.decompose()
-    return node.decode()
+        for bad in node.xpath(".//script | .//style"):
+            bad.getparent().remove(bad)
+    return etree.tostring(node, encoding="unicode", method="html")
+
+
+def _containing_own_text(temp, arg: str) -> list:
+    """自身及子孙中，直接文本包含 arg 的元素（legado 的 text.x 规则）。"""
+    out: list = []
+    if arg in _own_text(temp):
+        out.append(temp)
+    for d in temp.iter():
+        if d is not temp and _is_el(d) and arg in _own_text(d):
+            out.append(d)
+    return out
 
 
 class AnalyzeByJSoup:
     def __init__(self, doc: Any):
-        self.element: Tag = parse_doc(doc)
+        self.element = parse_doc(doc)
 
     # -------------------------------------------------------------- strings
     def get_string(self, rule_str: str) -> str | None:
@@ -120,18 +197,18 @@ class AnalyzeByJSoup:
                     texts.extend(group)
         return texts
 
-    def _select_css(self, selector: str) -> list[Tag]:
+    def _select_css(self, selector: str) -> list:
         # 1) 先按标准 CSS 走一遭（绝大多数规则不含 legado 专属伪类）
         try:
-            res = list(self.element.select(selector))
+            res = _css_select(self.element, selector)
             if res:
                 return res
-        except Exception:  # noqa: BLE001 - :eq 之类 soupsieve 不认
+        except Exception:  # noqa: BLE001 - :eq 之类 cssselect 不认
             pass
         # 2) legado 专属：:eq(n) 取第 n 个命中元素（0 基），按链式逐步解析
         return self._select_legado(selector)
 
-    def _select_legado(self, selector: str) -> list[Tag]:
+    def _select_legado(self, selector: str) -> list:
         m = re.search(r":eq\(\s*(-?\d+)\s*\)", selector)
         if not m:
             return []
@@ -139,14 +216,16 @@ class AnalyzeByJSoup:
         idx = int(m.group(1))
         rest = selector[m.end():]
         try:
-            elements = list(self.element.select(base)) if base else [self.element]
+            elements = _css_select(self.element, base) if base else [self.element]
         except Exception:  # noqa: BLE001
             elements = []
+        if not elements:
+            return []
         if idx < 0:
             idx += len(elements)
-        if idx < 0:
-            return []
-        if idx >= len(elements):
+            if idx < 0:
+                return []
+        elif idx >= len(elements):
             # legado/jsoup 对越界正下标收敛到最后一个命中元素
             # （典型如 @css:.prenext span:eq(2) a@href，.prenext 只有 2 个 span）
             idx = len(elements) - 1
@@ -156,7 +235,7 @@ class AnalyzeByJSoup:
         return AnalyzeByJSoup(target)._select_css(rest.strip())
 
     # ------------------------------------------------------------- elements
-    def get_elements(self, rule: str) -> list[Tag]:
+    def get_elements(self, rule: str) -> list:
         if not rule:
             return []
         css_flag = rule[:5].lower() == "@css:"
@@ -167,7 +246,7 @@ class AnalyzeByJSoup:
         ra = RuleAnalyzer(elements_rule)
         segments = ra.split_rule("&&", "||", "%%")
 
-        groups: list[list[Tag]] = []
+        groups: list[list] = []
         for seg in segments:
             if css_flag:
                 el = self._select_css(seg)
@@ -179,9 +258,9 @@ class AnalyzeByJSoup:
             ra_seg.trim()
             parts = _split_naive(ra_seg.queue, "@")
             if len(parts) > 1:
-                current: list[Tag] = [self.element]
+                current: list = [self.element]
                 for p in parts:
-                    nxt: list[Tag] = []
+                    nxt: list = []
                     for et in current:
                         nxt.extend(ElementsSingle().get_elements_single(et, p))
                     current = nxt
@@ -192,7 +271,7 @@ class AnalyzeByJSoup:
             if el and ra.elements_type == "||":
                 break
 
-        merged: list[Tag] = []
+        merged: list = []
         if groups:
             if ra.elements_type == "%%":
                 for i in range(len(groups[0])):
@@ -208,7 +287,7 @@ class AnalyzeByJSoup:
     def _result_list(self, rule_str: str) -> list[str] | None:
         if not rule_str:
             return None
-        elements: list[Tag] = [self.element]
+        elements: list = [self.element]
 
         from .rule_analyzer import RuleAnalyzer
 
@@ -218,7 +297,7 @@ class AnalyzeByJSoup:
 
         last = len(rules) - 1
         for i in range(last):
-            es: list[Tag] = []
+            es: list = []
             for elt in elements:
                 es.extend(ElementsSingle().get_elements_single(elt, rules[i]))
             elements = es
@@ -226,7 +305,7 @@ class AnalyzeByJSoup:
             return None
         return self._result_last(elements, rules[last])
 
-    def _result_last(self, elements: list[Tag], last_rule: str) -> list[str]:
+    def _result_last(self, elements: list, last_rule: str) -> list[str]:
         texts: list[str] = []
         if last_rule == "text":
             for el in elements:
@@ -235,12 +314,7 @@ class AnalyzeByJSoup:
                     texts.append(t)
         elif last_rule == "textNodes":
             for el in elements:
-                tn: list[str] = []
-                for item in el.children:
-                    if isinstance(item, NavigableString) and not isinstance(item, Comment):
-                        t = str(item).strip()
-                        if t:
-                            tn.append(t)
+                tn = _child_strings(el)
                 if tn:
                     texts.append("\n".join(tn))
         elif last_rule == "ownText":
@@ -265,6 +339,10 @@ class AnalyzeByJSoup:
                 texts.append(url)
         return texts
 
+    # ---------------------------------------------------------- text search
+    # text.x 规则的查找逻辑见模块级 _containing_own_text()，
+    # ElementsSingle 与本类共用。
+
 
 class ElementsSingle:
     """One selector step, with optional legacy or bracket-style index suffix."""
@@ -276,7 +354,7 @@ class ElementsSingle:
         self.indexes: list[int | tuple[int | None, int, int]] = []
 
     # ------------------------------------------------------------------ api
-    def get_elements_single(self, temp: Tag, rule: str) -> list[Tag]:
+    def get_elements_single(self, temp, rule: str) -> list:
         self._find_index_set(rule.strip())
 
         if not self.before_rule:
@@ -288,19 +366,35 @@ class ElementsSingle:
             if head == "children":
                 elements = _children(temp)
             elif head == "class":
-                elements = [temp] if arg in (temp.get("class") or []) else []
-                elements += temp.find_all(class_=arg)
+                if not arg:
+                    elements = []
+                else:
+                    cls = temp.get("class") or ""
+                    elements = [temp] if arg in cls.split() else []
+                    try:
+                        found = _class_xpath(arg)(temp)
+                    except Exception:  # noqa: BLE001 - arg 含特殊字符时退回逐点过滤
+                        found = [
+                            e for e in temp.iter()
+                            if _is_el(e) and arg in (e.get("class") or "").split()
+                        ]
+                    elements += [e for e in found if e is not temp]
             elif head == "tag":
-                elements = [temp] if temp.name == arg else []
-                elements += temp.find_all(arg)
+                if not arg:
+                    elements = []
+                else:
+                    elements = [temp] if temp.tag == arg else []
+                    # lxml 的 iter(tag) 含自身，bs4 的 find_all 不含 —— 对齐
+                    elements += [e for e in temp.iter(arg) if e is not temp]
             elif head == "id":
                 elements = [temp] if temp.get("id") == arg else []
-                elements += temp.find_all(id=arg)
+                elements += [e for e in temp.iter() if e is not temp
+                             and _is_el(e) and e.get("id") == arg]
             elif head == "text":
-                elements = self._containing_own_text(temp, arg)
+                elements = _containing_own_text(temp, arg)
             else:
                 try:
-                    elements = temp.select(self.before_rule)
+                    elements = _css_select(temp, self.before_rule)
                 except Exception:  # noqa: BLE001
                     elements = []
 
@@ -362,17 +456,6 @@ class ElementsSingle:
         if self.split_char == ".":
             return [elements[i] for i in chosen if 0 <= i < length]
         return elements
-
-    # -------------------------------------------------------------- helpers
-    @staticmethod
-    def _containing_own_text(temp: Tag, arg: str) -> list[Tag]:
-        out: list[Tag] = []
-        if arg in _own_text(temp):
-            out.append(temp)
-        for d in temp.descendants:
-            if isinstance(d, Tag) and arg in _own_text(d):
-                out.append(d)
-        return out
 
     # ---------------------------------------------------------- index parse
     def _find_index_set(self, rus: str) -> None:

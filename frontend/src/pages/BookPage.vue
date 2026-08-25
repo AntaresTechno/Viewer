@@ -1,20 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   MiuixButton,
   MiuixCard,
   MiuixProgressIndicator,
   MiuixText,
-  MiuixTabRow,
 } from "miuix-vue";
 import {
   api,
   errMsg,
-  coverProxyUrl,
 } from "@/api/client";
-import type { BookResult, Chapter, ShelfEntry, SourceInfo } from "@/api/client";
-import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import type { Chapter, ShelfEntry, SourceInfo } from "@/api/client";
+import BookDetailHero from "@/components/BookDetailHero.vue";
 import { openReader } from "@/utils/reader";
 
 const route = useRoute();
@@ -22,7 +20,7 @@ const router = useRouter();
 
 // vue-router 已对路径参数做过一次 decode，这里不能再解一次，
 // 否则含 %xx 的书源 URL 会被二次解码损坏。
-let bookUrl = route.params.bookUrl as string | undefined;
+let bookUrl = (route.params.bookUrl as string | undefined) ?? "";
 let origin = (route.query.origin as string) ?? "";
 // 详情页短链模式：/book/ref/:refId -> 直接读 book_refs 缓存档案
 const refId = route.params.refId != null ? Number(route.params.refId) : null;
@@ -31,7 +29,6 @@ const qAuthor = (route.query.author as string) ?? "";
 // 搜索结果里已知的封面：书源详情规则缺封面项时兜底展示
 const qCover = (route.query.cover as string) ?? "";
 
-const tab = ref(0);
 const loadingInfo = ref(true);
 const loadingToc = ref(false);
 const loadError = ref("");
@@ -52,7 +49,7 @@ const tocCached = ref(false);
 const inShelf = ref<ShelfEntry | null>(null);
 let pollTimer: number | null = null;
 
-/* 详情 tab：书源信息 + 规则快照（本地库展示"源规则/书源"） */
+/* 书源信息（页尾「书源与规则」折叠区展示） */
 const sourceInfo = ref<SourceInfo | null>(null);
 async function loadSourceInfo() {
   if (!origin || sourceInfo.value) return;
@@ -78,13 +75,10 @@ async function loadProgress() {
     /* 无进度 */
   }
 }
-const resumeLabel = computed(() => {
-  const p = progressInfo.value ?? inShelf.value?.progress ?? null;
-  if (p && p.chapterIndex >= 0) {
-    return p.chapterTitle || `第 ${p.chapterIndex + 1} 章`;
-  }
-  return "未开始阅读";
-});
+const activeProgress = computed(
+  () => inShelf.value?.progress ?? progressInfo.value ?? null,
+);
+
 function stringify(v: unknown): string {
   try {
     return JSON.stringify(v, null, 2);
@@ -100,7 +94,7 @@ async function loadInfo() {
   loadingInfo.value = true;
   loadError.value = "";
   try {
-    await loadSourceInfo();
+    void loadSourceInfo();
     const r = await api.bookInfo(origin, bookUrl, qName, qAuthor, qCover);
     // 后端已做合并：规则取不到的字段保留搜索阶段已知值
     info.value = {
@@ -110,6 +104,7 @@ async function loadInfo() {
       coverUrl: r.coverUrl || qCover || "",
     };
     document.title = `${info.value.name} · Viewer`;
+    void autoRefreshToc();
   } catch (e) {
     // 已有缓存档案时静默保留缓存内容，不弹错误面板
     if (!info.value) loadError.value = errMsg(e);
@@ -158,6 +153,9 @@ onMounted(async () => {
   void loadProgress();
 });
 
+/** 缓存档案或书源详情就绪后拉取目录（懒加载，失败不打断详情）。 */
+watch(info, () => void loadToc());
+
 onMounted(async () => {
   try {
     const shelf = await api.shelf();
@@ -169,6 +167,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   if (pollTimer !== null) window.clearInterval(pollTimer);
 });
 
@@ -213,6 +212,7 @@ async function loadToc(force = false) {
     const r = await api.chaptersCached(origin, bookUrl);
     chapters.value = r.chapters;
     tocCached.value = r.cached;
+    void autoRefreshToc();
   } catch (e) {
     alert(errMsg(e));
   } finally {
@@ -220,10 +220,67 @@ async function loadToc(force = false) {
   }
 }
 
-function switchTab(i: number) {
-  tab.value = i;
-  if (i === 1) void loadToc();
+/* ---- 目录缓存落后于书源最新章节时的自动补偿 ----
+ * 书源详情是实时抓的，目录却优先读本地缓存，两者并存会出现
+ * 「最新 第454章 · 共 415 章」这类矛盾。检测到落后就排队一次后台重抓
+ * （不限是否加入书架），轮询到完成后强制重载目录；期间在章节数旁标注「缓存」。 */
+const tocStale = ref(false);
+const tocAutoRefreshing = ref(false);
+let tocAutoAttempts = 0;
+let disposed = false;
+
+function latestChapterNo(title?: string): number | null {
+  const m = /第\s*(\d+)\s*[章节回話節]/.exec(title ?? "");
+  return m ? Number(m[1]) : null;
 }
+
+function tocLagsSource(): boolean {
+  const latest = latestChapterNo(info.value?.lastChapter);
+  return latest != null
+    && chapters.value.length > 0
+    && chapters.value.length < latest;
+}
+
+async function autoRefreshToc() {
+  if (disposed || !info.value || !origin || !bookUrl) return;
+  if (tocAutoRefreshing.value) return;
+  tocStale.value = tocLagsSource();
+  if (!tocStale.value) return;
+  tocAutoRefreshing.value = true;
+  try {
+    // 章节号可能存在卷号混编等特殊情况，自动重试最多两次
+    while (tocLagsSource() && tocAutoAttempts < 2 && !disposed) {
+      tocAutoAttempts++;
+      try {
+        await api.chaptersRefresh(origin, bookUrl);
+      } catch {
+        break; // 排队失败：保留缓存目录与「缓存」标注
+      }
+      // 轮询抓取状态直到完成/失败（3s × 20 次 ≈ 上限一分钟）
+      for (let i = 0; i < 20 && !disposed; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        if (disposed) return;
+        let st = "";
+        try {
+          st = (await api.tocStatus(origin, bookUrl)).status;
+        } catch {
+          break;
+        }
+        if (st === "done" || st === "error" || st === "none") break;
+      }
+      if (disposed) return;
+      await loadToc(true);
+    }
+  } finally {
+    tocAutoRefreshing.value = false;
+    tocStale.value = tocLagsSource();
+  }
+}
+
+const tocCountNote = computed(() => {
+  if (!tocStale.value) return "";
+  return tocAutoRefreshing.value ? "缓存 · 更新中…" : "缓存";
+});
 
 /* ------------------------------------------------------------- reading */
 function readFrom(index: number | null) {
@@ -245,9 +302,9 @@ function readFrom(index: number | null) {
   });
 }
 
-const resumeIndex = computed(() => inShelf.value?.progress?.chapterIndex ?? -1);
+const resumeIndex = computed(() => activeProgress.value?.chapterIndex ?? -1);
 const hasProgress = computed(
-  () => inShelf.value?.progress != null && resumeIndex.value >= 0,
+  () => activeProgress.value != null && resumeIndex.value >= 0,
 );
 
 /* ------------------------------------------------------------ shelf ops */
@@ -303,13 +360,17 @@ async function downloadToLibrary() {
     libDownloading = false;
   }
 }
-
-const tabs = ["详情", "目录"];
 </script>
 
 <template>
   <div>
-    <button class="back" @click="router.back()">← 返回</button>
+    <button class="back" @click="router.back()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m14.5 5.5-6.5 6.5 6.5 6.5"/>
+      </svg>
+      返回
+    </button>
 
     <div v-if="loadingInfo" class="center"><MiuixProgressIndicator /></div>
 
@@ -327,69 +388,36 @@ const tabs = ["详情", "目录"];
     </MiuixCard>
 
     <template v-else-if="info">
-      <!-- detail header -->
-      <div class="hero">
-        <img
-          class="cover"
-          :src="displayCover ? coverProxyUrl(displayCover) : FALLBACK_COVER_SVG"
-          @error="onCoverError($event, displayCover)"
-        >
-        <div class="hero-info">
-          <MiuixText type="title2">{{ info.name }}</MiuixText>
-          <div class="author">{{ info.author }}</div>
-          <div v-if="info.kind" class="kinds">{{ info.kind }}</div>
-          <p class="intro">{{ info.intro }}</p>
-          <div v-if="info.lastChapter" class="last">
-            最新：{{ info.lastChapter }}
-          </div>
-          <div class="ops">
-            <MiuixButton type="primary" @click="readFrom(hasProgress ? resumeIndex : 0)">
-              {{ hasProgress ? "继续阅读" : "开始阅读" }}
-            </MiuixButton>
-            <MiuixButton v-if="!inShelf" @click="addToShelf">加入书架</MiuixButton>
-            <MiuixButton v-else @click="removeFromShelf">移出书架</MiuixButton>
-            <MiuixButton @click="downloadToLibrary">下载到本地库</MiuixButton>
-          </div>
-          <div v-if="hasProgress" class="resume-hint">
-            上次读到：{{ inShelf?.progress?.chapterTitle }}
-          </div>
-        </div>
-      </div>
-
-      <MiuixTabRow
-        :tabs="tabs"
-        :model-value="tab"
-        @update:model-value="switchTab($event)"
+      <!-- 统一详情头部：与阅读器内「书籍信息」弹层共用同一组件 -->
+      <BookDetailHero
+        class="page-hero"
+        :origin="origin"
+        :book-url="bookUrl"
+        :name="info.name"
+        :author="info.author"
+        :kind="info.kind"
+        :intro="info.intro"
+        :cover-url="displayCover"
+        :last-chapter="info.lastChapter"
+        :chapter-count="chapters.length || null"
+        :chapter-count-note="tocCountNote"
       />
 
-      <!-- detail (本地书库信息) -->
-      <MiuixCard v-if="tab === 0" class="panel" :show-indication="false">
-        <dl class="detail-grid">
-          <div class="d-row"><dt>书名</dt><dd>{{ info.name }}</dd></div>
-          <div class="d-row"><dt>作者</dt><dd>{{ info.author || "佚名" }}</dd></div>
-          <div class="d-row"><dt>分类</dt><dd>{{ info.kind || "—" }}</dd></div>
-          <div class="d-row"><dt>内容</dt><dd class="intro">{{ info.intro || "暂无简介" }}</dd></div>
-          <div class="d-row"><dt>上次看到</dt><dd>{{ resumeLabel }}</dd></div>
-          <div class="d-row"><dt>最新章节</dt><dd>{{ info.lastChapter || "—" }}</dd></div>
-          <div class="d-row"><dt>章节数</dt><dd>{{ chapters.length ? `${chapters.length} 章` : "—" }}</dd></div>
-          <div class="d-row">
-            <dt>书源</dt>
-            <dd>{{ sourceInfo ? `${sourceInfo.name}（${sourceInfo.type}）` : origin || "—" }}</dd>
-          </div>
-          <div class="d-row">
-            <dt>源地址</dt>
-            <dd class="mono">{{ origin || "—" }}</dd>
-          </div>
-        </dl>
+      <!-- 操作排 -->
+      <div class="ops">
+        <MiuixButton type="primary" @click="readFrom(hasProgress ? resumeIndex : 0)">
+          {{ hasProgress ? "继续阅读" : "开始阅读" }}
+        </MiuixButton>
+        <MiuixButton v-if="!inShelf" @click="addToShelf">加入书架</MiuixButton>
+        <MiuixButton v-else @click="removeFromShelf">移出书架</MiuixButton>
+        <MiuixButton @click="downloadToLibrary">下载到本地库</MiuixButton>
+      </div>
+      <div v-if="hasProgress" class="resume-hint">
+        上次读到：{{ activeProgress?.chapterTitle }}
+      </div>
 
-        <div class="rules">
-          <div class="rules-title">源规则</div>
-          <pre class="rules-json">{{ sourceInfo ? stringify(sourceInfo.rules) : "加载中…" }}</pre>
-        </div>
-      </MiuixCard>
-
-      <!-- toc -->
-      <MiuixCard v-if="tab === 1" class="panel" :show-indication="false">
+      <!-- 目录 -->
+      <MiuixCard class="panel" :show-indication="false">
         <div class="toc-bar">
           <span class="toc-meta">
             共 {{ chapters.length }} 章
@@ -427,67 +455,71 @@ const tabs = ["详情", "目录"];
           </template>
         </div>
       </MiuixCard>
+
+      <!-- 书源与规则：折叠收纳，不再占用独立标签页 -->
+      <details class="src-card">
+        <summary>书源与规则</summary>
+        <dl class="detail-grid">
+          <div class="d-row">
+            <dt>书源</dt>
+            <dd>{{ sourceInfo ? `${sourceInfo.name}（${sourceInfo.type}）` : origin || "—" }}</dd>
+          </div>
+          <div class="d-row">
+            <dt>源地址</dt>
+            <dd class="mono">{{ origin || "—" }}</dd>
+          </div>
+        </dl>
+        <pre class="rules-json">{{ sourceInfo ? stringify(sourceInfo.rules) : "加载中…" }}</pre>
+      </details>
     </template>
   </div>
 </template>
 
 <style scoped>
 .back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 0;
   background: none;
-  color: var(--m-color-primary);
-  cursor: pointer;
-  font-size: 14px;
-  margin-bottom: 12px;
-  padding: 0;
-}
-.hero {
-  display: flex;
-  gap: 22px;
-  margin-bottom: 18px;
-}
-.cover {
-  width: 130px;
-  height: 176px;
-  border-radius: 14px;
-  object-fit: cover;
-  background: var(--m-color-surface-container-high);
-  flex: none;
-}
-.hero-info {
-  min-width: 0;
-}
-.author {
   color: var(--m-color-on-surface-secondary);
-  margin: 4px 0;
+  cursor: pointer;
+  font-size: 13.5px;
+  margin-bottom: 14px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+  font-family: inherit;
 }
-.kinds {
-  font-size: 12px;
-  color: var(--m-color-primary);
-  margin-bottom: 6px;
+.back:hover {
+  background: var(--m-color-surface-container-high);
+  color: var(--m-color-on-surface);
 }
-.intro {
-  color: var(--m-color-on-background-variant);
-  font-size: 13px;
-  line-height: 1.6;
-  max-width: 640px;
+.back svg {
+  width: 17px;
+  height: 17px;
 }
-.last {
-  font-size: 12px;
-  color: var(--m-color-outline);
-  margin: 8px 0;
+
+.page-hero {
+  margin-bottom: 16px;
 }
 .ops {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .resume-hint {
-  margin-top: 8px;
+  margin-top: 10px;
   font-size: 12px;
-  color: var(--m-color-on-background-variant);
+  color: var(--m-color-primary);
+}
+
+.center {
+  display: grid;
+  place-items: center;
+  padding: 40px 0;
 }
 .panel {
-  margin-top: 14px;
+  margin-top: 16px;
 }
 .error-panel {
   max-width: 560px;
@@ -504,6 +536,8 @@ const tabs = ["详情", "目录"];
   line-height: 1.6;
   margin: 0 0 14px;
 }
+
+/* ---- 目录 ---- */
 .toc-bar {
   display: flex;
   align-items: center;
@@ -528,11 +562,8 @@ const tabs = ["详情", "目录"];
   list-style: none; /* 自动编号与块级链接会拆成两行，改用行内序号 */
   padding-left: 4px;
   margin: 0;
-}
-@media (max-width: 720px) {
-  .toc-list {
-    columns: 1;
-  }
+  max-height: 460px;
+  overflow-y: auto;
 }
 .toc-list a {
   cursor: pointer;
@@ -561,8 +592,34 @@ const tabs = ["详情", "目录"];
 .toc-list a:hover {
   background: var(--m-color-surface-container-high);
 }
+@media (max-width: 720px) {
+  .toc-list {
+    columns: 1;
+  }
+}
+.empty {
+  color: var(--m-color-on-background-variant);
+  font-size: 13px;
+}
 
-/* ---- 详情 tab ---- */
+/* ---- 书源与规则折叠区 ---- */
+.src-card {
+  margin-top: 16px;
+  padding: 2px 20px 16px;
+  border-radius: var(--app-radius-card, 20px);
+  background: var(--m-color-surface-container);
+}
+.src-card summary {
+  cursor: pointer;
+  padding: 12px 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--m-color-on-surface-secondary);
+  user-select: none;
+}
+.src-card[open] summary {
+  color: var(--m-color-on-surface);
+}
 .detail-grid {
   margin: 0;
 }
@@ -574,6 +631,9 @@ const tabs = ["详情", "目录"];
   border-bottom: 1px solid var(--m-color-divider-line);
   font-size: 13px;
 }
+.d-row:last-of-type {
+  border-bottom: 0;
+}
 .d-row dt {
   color: var(--m-color-on-background-variant);
   flex: none;
@@ -583,26 +643,14 @@ const tabs = ["详情", "目录"];
   color: var(--m-color-on-surface);
   min-width: 0;
   word-break: break-word;
-  white-space: pre-wrap;
-}
-.d-row .intro {
-  max-width: none;
 }
 .mono {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.rules {
-  margin-top: 14px;
-}
-.rules-title {
-  font-weight: 600;
-  font-size: 13px;
-  margin-bottom: 6px;
-}
 .rules-json {
-  margin: 0;
+  margin: 12px 0 0;
   padding: 12px;
   border-radius: 12px;
   background: var(--m-color-surface-container-high);

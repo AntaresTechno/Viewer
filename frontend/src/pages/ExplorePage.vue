@@ -3,13 +3,12 @@ import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import {
   MiuixButton,
-  MiuixCard,
   MiuixProgressIndicator,
-  MiuixText,
 } from "miuix-vue";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import type { BookResult, ExploreKind, SourceRow } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import { openDetail } from "@/utils/reader";
 
 const $router = useRouter();
 
@@ -84,34 +83,27 @@ async function fetchBooks() {
 }
 
 async function openBook(b: BookResult) {
-  try {
-    const ref = await api.resolveBook({
-      sourceUrl: b.origin,
-      bookUrl: b.bookUrl,
-      name: b.name,
-      author: b.author ?? "",
-      coverUrl: b.coverUrl ?? "",
-      intro: b.intro ?? "",
-      kind: b.kind ?? "",
-      lastChapter: b.lastChapter ?? "",
-      tocUrl: "",
-    });
-    void $router.push(`/book/ref/${ref.id}`);
-  } catch {
-    void $router.push(
-      `/book/${encodeURIComponent(b.bookUrl)}?origin=${encodeURIComponent(
-        b.origin,
-      )}&name=${encodeURIComponent(b.name)}&author=${encodeURIComponent(
-        b.author ?? "",
-      )}&cover=${encodeURIComponent(b.coverUrl ?? "")}`,
-    );
-  }
+  await openDetail($router, {
+    sourceUrl: b.origin,
+    bookUrl: b.bookUrl,
+    name: b.name,
+    author: b.author ?? "",
+    coverUrl: b.coverUrl ?? "",
+    intro: b.intro ?? "",
+    kind: b.kind ?? "",
+    lastChapter: b.lastChapter ?? "",
+  });
 }
 </script>
 
 <template>
   <div>
-    <h2 class="page-title">发现</h2>
+    <div class="page-head">
+      <div>
+        <h2 class="page-title">发现</h2>
+        <p class="page-sub">按书源的分类页探索新内容</p>
+      </div>
+    </div>
 
     <div class="src-row">
       <button
@@ -146,25 +138,24 @@ async function openBook(b: BookResult) {
     </div>
     <p v-if="error" class="err">{{ error }}</p>
 
-    <div v-if="books.length" class="result-grid">
-      <MiuixCard
+    <div v-if="books.length" class="cover-grid">
+      <button
         v-for="(b, i) in books"
         :key="b.origin + b.bookUrl + i"
-        class="book-card"
+        type="button"
+        class="ctile"
         @click="openBook(b)"
       >
-        <img
-          class="cover"
-          :src="b.coverUrl ? coverProxyUrl(b.coverUrl) : FALLBACK_COVER_SVG"
-          loading="lazy"
-          @error="onCoverError($event, b.coverUrl)"
-        >
-        <div class="info">
-          <MiuixText type="title4">{{ b.name }}</MiuixText>
-          <div class="meta">{{ b.author }}</div>
-          <div class="intro">{{ b.intro }}</div>
-        </div>
-      </MiuixCard>
+        <span class="ctile-cover">
+          <img
+            :src="b.coverUrl ? coverProxyUrl(b.coverUrl) : FALLBACK_COVER_SVG"
+            loading="lazy"
+            @error="onCoverError($event, b.coverUrl)"
+          >
+        </span>
+        <span class="ctile-name">{{ b.name }}</span>
+        <span class="ctile-meta">{{ b.author || "佚名" }}</span>
+      </button>
     </div>
 
     <div class="more-row" v-if="books.length || loading">
@@ -226,48 +217,9 @@ async function openBook(b: BookResult) {
   font-size: 13px;
   margin: 6px 0 12px;
 }
-.result-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
-}
-.book-card {
-  cursor: pointer;
-}
-.book-card :deep(.m-card) {
-  flex-direction: row;
-  gap: 12px;
-}
-.cover {
-  width: 84px;
-  height: 112px;
-  object-fit: cover;
-  border-radius: 10px;
-  background: var(--m-color-surface-container-high);
-  flex: none;
-}
-.info {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.meta {
-  font-size: 13px;
-  color: var(--m-color-on-surface-secondary);
-}
-.intro {
-  font-size: 12px;
-  color: var(--m-color-on-background-variant);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
 .more-row {
   display: flex;
   justify-content: center;
-  margin: 18px 0 6px;
+  margin: 22px 0 6px;
 }
 </style>

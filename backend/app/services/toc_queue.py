@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.db import get_session_factory
 from ..models import BookChapter, BookRef, BookSourceRow, ShelfItem, TocJob
+from ..models import utcnow
 from ..plugins.registry import PluginContext, get_engine
 
 # keep this many finished job rows around for status display
@@ -148,6 +149,19 @@ async def process_job(job_id: int) -> None:
         return
 
     async with factory() as session:
+        # 记录刷新前的目录状态，用于检测书源是否有内容变化（新章/换章）
+        prev_count = await session.scalar(
+            select(func.count(BookChapter.id)).where(
+                BookChapter.source_url == source_url,
+                BookChapter.book_url == book_url,
+            )
+        )
+        prev_last = await session.scalar(
+            select(BookChapter).where(
+                BookChapter.source_url == source_url,
+                BookChapter.book_url == book_url,
+            ).order_by(BookChapter.idx.desc(), BookChapter.id.desc()).limit(1)
+        )
         await session.execute(
             delete(BookChapter).where(
                 BookChapter.source_url == source_url,
@@ -174,12 +188,27 @@ async def process_job(job_id: int) -> None:
         )).scalars().all()
         last_chapter = str(info.get("lastChapter") or "").strip() \
             or (chapters[-1]["title"] if chapters else "")
+
+        # 更新检测：仅当此前已有目录且章节数或最新一章发生变化才算书源更新
+        # （首次抓取是初始填充，不应当作「有更新」打扰用户）
+        new_last_title = str(chapters[-1].get("title") or "") if chapters else ""
+        new_last_url = str(chapters[-1].get("url") or "") if chapters else ""
+        source_changed = bool(prev_count) and (
+            prev_count != len(chapters)
+            or (prev_last is not None
+                and (prev_last.title or "", prev_last.url or "")
+                != (new_last_title, new_last_url))
+        )
+        now = utcnow()
         for it in shelves:
             it.toc_url = toc_url
             if last_chapter:
                 it.last_chapter = last_chapter
             if not it.cover_url and info.get("coverUrl"):
                 it.cover_url = str(info["coverUrl"])
+            if source_changed:
+                it.updated_at = now
+                it.has_update = True
         # 同步回填书籍短链档案：阅读器/详情页即可全缓存展示（含简介）
         refs = (await session.execute(
             select(BookRef).where(

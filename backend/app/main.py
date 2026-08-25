@@ -23,6 +23,10 @@ from .plugins.registry import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # 每日自动刷新（书架目录更新检查 + WebDAV 自动备份）
+    from .services import daily_refresh
+
+    daily_refresh.start()
     yield
 
 

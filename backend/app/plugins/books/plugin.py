@@ -68,7 +68,7 @@ def create_router(ctx) -> APIRouter:
         ShelfItem,
         TocJob,
     )
-    from ...plugins.registry import engine_keys, get_engine
+    from ...plugins.registry import engine_keys, get_engine, plugin_enabled
     from ...services import content_cache
 
     router = APIRouter(tags=["books"])
@@ -481,6 +481,69 @@ def create_router(ctx) -> APIRouter:
             next_chapter_url=next_chapter_url, is_volume=is_volume,
         )
 
+        # 正文净化插件启用时走「获取 → 净化 → 存库 → 调用」管线：
+        # purified_contents 缓存优先（指纹一致直接调用；规则变化用原文
+        # 本地重净化；断网兜底旧结果/本地书库）。
+        if plugin_enabled("content_purify"):
+            from ...services import content_purify
+
+            async def _fetch_engine() -> str:
+                return await eng.get_content(
+                    src, {}, chapter, next_chapter_url or None,
+                    base_url=base or None,
+                )
+
+            async def _fetch_raw() -> str:
+                # 回源走内容 LRU：预取接口写入的条目在这里也能命中，
+                # 否则启用净化插件后预取完全不生效。
+                text, _hit = await content_cache.get_or_fetch(key, _fetch_engine)
+                return text
+
+            async def _local_fallback() -> str | None:
+                r = await db.scalar(
+                    select(BookChapterContent).where(
+                        BookChapterContent.source_url == source_url,
+                        BookChapterContent.url == url,
+                    )
+                )
+                return (r.content or "") or None if r else None
+
+            try:
+                text, cached = await content_purify.process_chapter(
+                    db,
+                    source_url=source_url, url=url, book_url=book_url or "",
+                    title=title, book_name=name,
+                    source_name=row.source_name,
+                    fetch_raw=_fetch_raw,
+                    local_fallback=_local_fallback,
+                )
+            except FetchError as exc:
+                raise HTTPException(502, f"书源连接失败：{exc}") from exc
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    502, f"书源解析失败：{type(exc).__name__}: {exc}"
+                ) from exc
+
+            # 同步本地书库（离线可读），与返回内容保持一致
+            local_row = await db.scalar(
+                select(BookChapterContent).where(
+                    BookChapterContent.source_url == source_url,
+                    BookChapterContent.url == url,
+                )
+            )
+            if local_row is None:
+                db.add(BookChapterContent(
+                    source_url=source_url, book_url=book_url,
+                    url=url, title=title, content=text,
+                ))
+                await db.commit()
+            elif (local_row.content or "") != text:
+                local_row.content = text
+                await db.commit()
+            return {"content": text, "cached": cached, "purified": True}
+
         # 本地书库优先：已下载过的章节直接从 DB 返回，不再回源
         cached_row = await db.scalar(
             select(BookChapterContent).where(
@@ -531,7 +594,8 @@ def create_router(ctx) -> APIRouter:
 
     class PrefetchBody(BaseModel):
         source_url: str
-        items: list[PrefetchItem] = Field(max_length=10)
+        # 前端每次带「N 章 + 1 条下一章指针」，N 最大 20 → 上限 21
+        items: list[PrefetchItem] = Field(max_length=21)
 
     @router.post("/content/prefetch")
     async def content_prefetch(
@@ -539,23 +603,25 @@ def create_router(ctx) -> APIRouter:
         current=Depends(require_perm("books.content")),
         db: AsyncSession = Depends(get_db),
     ):
-        """预取后续章节（默认阅读器会带后面 5 章）。"""
+        """预取后续章节（阅读器按设置带后面 N 章并多带 1 条指针）。"""
         row = await _load_source_row(db, body.source_url)
         src = json.loads(row.raw_json)
         eng = _engine_for(getattr(row, "engine", None))
         queued = 0
         for i, it in enumerate(body.items):
+            nxt = body.items[i + 1].url if i + 1 < len(body.items) else ""
+            # 键必须与 GET /content 完全一致（含 next_chapter_url），
+            # 否则真实阅读时算出的键对不上，预取的缓存永远命中不了。
             key = content_cache.cache_key(
                 body.source_url, it.url, base=it.base, title=it.title,
-                is_volume=it.isVolume,
+                next_chapter_url=nxt, is_volume=it.isVolume,
             )
-            nxt = body.items[i + 1].url if i + 1 < len(body.items) else None
 
             async def _factory(it=it, nxt=nxt) -> str:
                 return await eng.get_content(
                     src, {},
                     {"url": it.url, "title": it.title, "isVolume": it.isVolume},
-                    nxt, base_url=it.base or None,
+                    nxt or None, base_url=it.base or None,
                 )
 
             if await content_cache.spawn_prefetch(key, _factory):
@@ -788,9 +854,16 @@ def create_router(ctx) -> APIRouter:
 
     @router.get("/shelf")
     async def my_shelf(
+        sort: str = "added",
         current=Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
     ):
+        """我的书架。
+
+        ``sort``：``added`` 加入时间（默认）｜ ``updated`` 最近更新
+        （书源检测到新章的时间）｜ ``read`` 最后阅读（阅读进度时间，
+        未读过的排最后）。
+        """
         user, perms = current
         allowed = (
             user.is_superuser or "*" in perms or "books.*" in perms
@@ -798,12 +871,42 @@ def create_router(ctx) -> APIRouter:
         )
         if not allowed:
             raise HTTPException(403, "权限不足：books.shelf.read")
-        rows = (
-            await db.execute(
-                select(ShelfItem).where(ShelfItem.user_id == user.id)
-                .order_by(ShelfItem.created_at.desc())
+
+        base_stmt = select(ShelfItem).where(ShelfItem.user_id == user.id)
+        if sort == "updated":
+            rows = (
+                await db.execute(
+                    base_stmt.order_by(
+                        ShelfItem.updated_at.desc(), ShelfItem.id.desc()
+                    )
+                )
+            ).scalars().all()
+        elif sort == "read":
+            # 最后阅读排序：进度新的在前，从未读过的按加入时间垫底
+            prog_rows = (
+                await db.execute(
+                    select(ReadProgress).where(ReadProgress.user_id == user.id)
+                )
+            ).scalars().all()
+            read_at = {p.book_url: p.updated_at for p in prog_rows}
+            rows = (
+                await db.execute(base_stmt.order_by(ShelfItem.id.desc()))
+            ).scalars().all()
+            rows = sorted(
+                rows,
+                key=lambda r: (
+                    read_at.get(r.book_url) is not None,
+                    read_at.get(r.book_url) or r.created_at,
+                ),
+                reverse=True,
             )
-        ).scalars().all()
+        else:
+            rows = (
+                await db.execute(
+                    base_stmt.order_by(ShelfItem.created_at.desc(), ShelfItem.id.desc())
+                )
+            ).scalars().all()
+
         prog_rows = (
             await db.execute(
                 select(ReadProgress).where(ReadProgress.user_id == user.id)
@@ -857,6 +960,8 @@ def create_router(ctx) -> APIRouter:
                     "intro": r.intro,
                     "lastChapter": r.last_chapter,
                     "sourceUrl": r.source_url,
+                    "updatedAt": r.updated_at.isoformat() if r.updated_at else None,
+                    "hasUpdate": bool(r.has_update),
                     "progress": _progress(r.book_url),
                     "toc": _toc_status(r),
                 }
@@ -967,6 +1072,15 @@ def create_router(ctx) -> APIRouter:
         row.chapter_index = body.chapterIndex
         row.chapter_title = body.chapterTitle
         row.offset = body.offset
+        # 用户已读到最新位置 → 清掉书架上的「有更新」徽标
+        shelf_row = await db.scalar(
+            select(ShelfItem).where(
+                ShelfItem.user_id == user.id,
+                ShelfItem.book_url == body.bookUrl,
+            )
+        )
+        if shelf_row is not None and shelf_row.has_update:
+            shelf_row.has_update = False
         await db.commit()
         return {"ok": True}
 
@@ -1157,6 +1271,14 @@ def create_router(ctx) -> APIRouter:
                     select(ReplaceRule).where(ReplaceRule.is_active)
                 )).scalars().all()
 
+                # 正文净化插件启用时：预下载同样走净化规则包（与阅读一致）
+                purify_on = plugin_enabled("content_purify")
+                purify_rules: list = []
+                if purify_on:
+                    from ...services import content_purify as _cp
+
+                    purify_rules = await _cp.active_rules(s)
+
             job["total"] = len(chapters)
             try:
                 concurrency = max(1, int(job.get("concurrency") or settings.library_download_concurrency))
@@ -1185,7 +1307,13 @@ def create_router(ctx) -> APIRouter:
                         job["error"] = f"第{job['done'] + 1}章「{ch.title}」失败：{type(exc).__name__}"
                         return
                     text = raw
-                    if rules:
+                    if purify_on and purify_rules:
+                        text, _ = await _cp.purify_text(
+                            raw, purify_rules,
+                            book_name=job["name"], source_url=src_url,
+                            source_name=src_name,
+                        )
+                    elif rules:
                         text, _ = await apply_rules(
                             raw, list(rules),
                             book_name=job["name"], source_url=src_url, source_name=src_name,

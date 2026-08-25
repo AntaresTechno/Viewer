@@ -7,8 +7,9 @@ viewer/
 ├── backend/            # FastAPI + SQLAlchemy(async aiosqlite)
 │   ├── app/
 │   │   ├── core/       # 配置 / 数据库 / 安全(JWT+pbkdf2) / 依赖注入权限
-│   │   ├── models/     # User, Role, PluginState, BookSourceRow, ShelfItem, ReadProgress
-│   │   ├── plugins/    # 插件目录：auth users roles plugins dashboard books
+│   │   ├── models/     # User, Role, PluginState, BookSourceRow, ShelfItem, ReadProgress, ReadingStat, WebDavConfig …
+│   │   ├── plugins/    # 插件目录：auth home users roles plugins dashboard books webdav purify engine_legado
+│   │   ├── services/   # toc_queue（后台目录队列）/ daily_refresh（每日自动更新）/ content_purify …
 │   │   └── legado_rule/# Legado 规则引擎 Python 移植（AnalyzeRule/AnalyzeUrl/WebBook…）
 │   └── tests/          # 规则引擎单测 + e2e_smoke.ps1 全链路冒烟脚本
 ├── frontend/           # Vite + Vue3 + TS + pinia + vue-router + miuix-vue（Miuix/MD3 双设计可切换）
@@ -65,6 +66,9 @@ npm run dev          # 或开发模式（5173 端口代理 /api → 8000）
 | 插件管理 | 列出全部 API 插件并启停（重启生效），仅超级管理员 |
 | 仪表盘 | 用户/书源/书架/角色/插件统计 + 最近注册 |
 | 书城 | 书源导入（URL 或粘贴 legado JSON）、启停/删除；并发搜索（信号量 6、单源 25s 超时）；详情/目录（含 nextTocUrl 分页）/正文（含 nextContentUrl 合并翻页）；封面代理；书架与阅读进度 |
+| 首页 | 侧栏「首页」选项卡（打开网站仍默认进书架）：最近阅读续读入口、今日/累计阅读时长、累计天数与在读本数、连续阅读天数、近 14 天柱状图、书架「有更新」提醒；阅读器每 30s 心跳上报在读时长（home 插件） |
+| WebDAV | 把书架/阅读进度/阅读统计备份到任意 WebDAV 网盘（坚果云/Alist 等）：配置测试、立即备份、云端列表恢复/删除，支持每日自动备份（webdav 插件） |
+| 自动更新 | 每天定时拉取书架全部书籍的最新目录（默认凌晨 4 点，`VIEWER_DAILY_REFRESH_HOUR` 可调），检测到新章的书架条目标记「有更新」，书架可按 加入时间 / 最近更新 / 最后阅读 排序 |
 
 ## 插件架构
 
@@ -124,7 +128,7 @@ python -m http.server 8901 --directory viewer/dev-fixtures/site
 
 ```powershell
 cd viewer/backend
-.\.venv\Scripts\python -m pytest -q      # 32 个测试（规则引擎 27 + 引擎插件架构 5）
+.\.venv\Scripts\python -m pytest -q      # 规则引擎 + 插件架构 + 首页/WebDAV 插件测试
 .\tests\e2e_smoke.ps1                    # 需先启动 backend(8000) 与夹具站(8901)
 ```
 
@@ -134,3 +138,4 @@ cd viewer/backend
 - 插件停用需重启后端生效（挂载发生在 import 时）。
 - 引擎以"行为兼容"为目标，个别 Kotlin 边角（如部分 JS 桥的 Android 专属方法）为桩实现。
 - 封面代理出于简化使用查询串传 token（img 标签无法带 Authorization 头）。
+- WebDAV 密码以 base64 混淆存储于本站数据库（可还原以便发起请求），非加密保管。

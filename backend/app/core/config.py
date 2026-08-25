@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     prefetch_concurrency: int = 3      # 阅读器内容预取的最大并发请求数
     library_download_concurrency: int = 4  # 整本预下载的最大并发章节数
 
+    # ---- 每日自动更新（拉取书架全部书籍的最新目录） ----
+    daily_refresh_enabled: bool = True
+    daily_refresh_hour: int = 4        # 每天几点运行（服务器本地时间）
+    # 重启后若当天还没跑过，则补跑一次（默认开）
+    daily_refresh_catch_up: bool = True
+
     model_config = {"env_prefix": "VIEWER_", "env_file": ".env", "extra": "ignore"}
 
 

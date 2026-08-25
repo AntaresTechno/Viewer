@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import { openDetail } from "@/utils/reader";
 
 interface LibraryBook {
   sourceUrl: string;
@@ -112,12 +113,14 @@ async function clearLibrary(book: LibraryBook) {
 }
 
 function openBook(b: LibraryBook) {
-  const q = new URLSearchParams({
-    source_url: b.sourceUrl,
+  void openDetail(router, {
+    sourceUrl: b.sourceUrl,
+    bookUrl: b.bookUrl,
     name: b.name,
     author: b.author,
+    coverUrl: b.coverUrl,
+    intro: b.intro,
   });
-  router.push(`/book/${encodeURIComponent(b.bookUrl)}?${q.toString()}`);
 }
 
 function percent(b: LibraryBook): number {

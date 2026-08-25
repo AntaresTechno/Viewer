@@ -115,6 +115,10 @@ export interface ShelfEntry {
   intro: string;
   lastChapter: string;
   sourceUrl: string;
+  /** 书源侧最近一次检测到内容变化的时间（目录刷新发现新章时更新） */
+  updatedAt?: string | null;
+  /** 目录刷新检测到新章且还没读过时为 true */
+  hasUpdate?: boolean;
   progress?: {
     chapterIndex: number;
     chapterTitle: string;
@@ -127,6 +131,9 @@ export interface ShelfEntry {
     error: string;
   };
 }
+
+/** 书架排序方式：加入时间 / 最近更新 / 最后阅读 */
+export type ShelfSort = "added" | "updated" | "read";
 
 export interface ExploreKind {
   title: string;
@@ -169,8 +176,124 @@ export interface PrefetchItem {
   isVolume?: boolean;
 }
 
-const http = axios.create({ baseURL: "/api", timeout: 60_000 });
+/* ------------------------------------------------------ purify (正文净化) */
+/** 规则来源目录项：内置(MD3) / 乌云净化（自定义来源走 import 接口）。 */
+export interface PurifyCatalogItem {
+  key: string;
+  title: string;
+  description: string;
+  installable: boolean;
+  installed: boolean;
+  jsEngine: boolean;
+  /** 乌云净化专属字段 */
+  packId?: number | null;
+  packEnabled?: boolean;
+  ruleCount?: number;
+  groups?: Record<string, number>;
+  jsRules?: number;
+  contentRules?: number;
+}
 
+export interface PurifyPack {
+  id: number;
+  name: string;
+  description: string;
+  origin: string;
+  enabled: boolean;
+  order: number;
+  ruleCount?: number;
+}
+
+export interface PurifyRuleItem {
+  id: number;
+  packId: number;
+  name: string;
+  order: number;
+  isActive: boolean;
+  pattern: string;
+  replacement: string;
+  scope: string;
+  regex: boolean;
+  caseSensitive: boolean;
+  scopeContent: boolean;
+  scopeTitle: boolean;
+}
+
+export interface PurifyCacheStats {
+  chapters: number;
+  rawBytes: number;
+  contentBytes: number;
+  booksTotal: number;
+  books: Array<{
+    sourceUrl: string;
+    bookUrl: string;
+    name: string;
+    chapters: number;
+  }>;
+}
+
+/* ------------------------------------------------------- home（首页插件） */
+export interface HomeRecent {
+  bookUrl: string;
+  sourceUrl: string;
+  name: string;
+  author: string;
+  coverUrl: string;
+  intro?: string;
+  lastChapter?: string;
+  chapterIndex: number;
+  chapterTitle: string;
+  readAt: string | null;
+}
+
+export interface HomeUpdate {
+  id: number;
+  bookUrl: string;
+  sourceUrl: string;
+  name: string;
+  author: string;
+  coverUrl: string;
+  lastChapter?: string;
+  updatedAt: string | null;
+  readAt: string | null;
+}
+
+export interface HomeSummary {
+  todaySeconds: number;
+  totalSeconds: number;
+  totalDays: number;
+  totalBooks: number;
+  streakDays: number;
+  recents: HomeRecent[];
+  updates: HomeUpdate[];
+  date: string;
+}
+
+export interface DailyPoint {
+  day: string;
+  seconds: number;
+}
+
+/* ---------------------------------------------------- webdav（备份插件） */
+export interface WebDavConfigInfo {
+  url: string;
+  username: string;
+  directory: string;
+  hasPassword: boolean;
+  autoBackup: boolean;
+  lastBackupAt: string | null;
+  lastBackupFile: string;
+}
+
+export interface WebDavBackupItem {
+  name: string;
+  href: string;
+  size: number;
+  modified: string;
+  isDir: boolean;
+}
+
+const http = axios.create({ baseURL: "/api", timeout: 60_000 });
 http.interceptors.request.use((cfg) => {
   const token = localStorage.getItem("viewer_token");
   if (token) cfg.headers.Authorization = `Bearer ${token}`;
@@ -436,6 +559,7 @@ export const api = {
     name = "",
     bookUrl = "",
     nextChapterUrl = "",
+    isVolume = false,
   ) => {
     const params = new URLSearchParams({
       source_url: sourceUrl,
@@ -445,12 +569,14 @@ export const api = {
       name,
       book_url: bookUrl,
       next_chapter_url: nextChapterUrl,
+      // 缓存键的一部分：与预取接口传的 isVolume 保持一致，否则命中不了
+      is_volume: String(isVolume),
     });
     const r = await http.get(`/books/content?${params.toString()}`);
     return r.data as { content: string };
   },
-  shelf: async () => {
-    const r = await http.get("/books/shelf");
+  shelf: async (sort: ShelfSort = "added") => {
+    const r = await http.get("/books/shelf", { params: { sort } });
     return r.data as { items: ShelfEntry[] };
   },
   shelfAdd: async (e: Omit<ShelfEntry, "id" | "progress">) => {
@@ -563,6 +689,203 @@ export const api = {
       { text, bookName, sourceUrl },
     );
     return r.data;
+  },
+
+  /* ------------------------------------------------- purify (正文净化) */
+  purifyCatalog: async () => {
+    const r = await http.get("/purify/catalog");
+    return r.data as { items: PurifyCatalogItem[] };
+  },
+  purifyInstallPreset: async (key: string) => {
+    const r = await http.post<{
+      ok: boolean;
+      installed: boolean;
+      packId?: number;
+      rules?: number;
+      note?: string;
+    }>("/purify/presets/install", { key });
+    return r.data;
+  },
+  purifyPacks: async () => {
+    const r = await http.get("/purify/packs");
+    return r.data as { items: PurifyPack[] };
+  },
+  purifyCreatePack: async (name: string, description = "") => {
+    const r = await http.post<{ ok: boolean; id: number }>(
+      "/purify/packs/create",
+      { name, description },
+    );
+    return r.data;
+  },
+  /** 导入 legado 替换规则 JSON 为一个净化规则包（粘贴）。 */
+  purifyImportPack: async (data: string, name = "") => {
+    const r = await http.post<{ ok: boolean; packId: number; imported: number }>(
+      "/purify/packs/import",
+      { data, name },
+    );
+    return r.data;
+  },
+  /** 从 URL 拉取规则 JSON 导入为一个净化规则包。 */
+  purifyImportUrl: async (url: string, name = "") => {
+    const r = await http.post<{ ok: boolean; packId: number; imported: number }>(
+      "/purify/packs/import-url",
+      { url, name },
+    );
+    return r.data;
+  },
+  /** 上传规则 JSON 文件导入为一个净化规则包。 */
+  purifyImportFile: async (file: File, name = "") => {
+    const fd = new FormData();
+    fd.append("file", file);
+    if (name) fd.append("name", name);
+    const r = await http.post<{ ok: boolean; packId: number; imported: number }>(
+      "/purify/packs/import-file",
+      fd,
+      { timeout: 60_000 },
+    );
+    return r.data;
+  },
+  purifyUpdatePack: async (
+    id: number,
+    patch: Partial<Pick<PurifyPack, "name" | "description" | "enabled" | "order">>,
+  ) => {
+    await http.put(`/purify/packs/${id}`, patch);
+  },
+  purifyTogglePack: async (id: number) => {
+    const r = await http.post(`/purify/packs/${id}/toggle`, {});
+    return r.data as { ok: boolean; enabled: boolean };
+  },
+  purifyDeletePack: async (id: number) => {
+    await http.delete(`/purify/packs/${id}`);
+  },
+  purifyRules: async (packId: number) => {
+    const r = await http.get(`/purify/packs/${packId}/rules`);
+    return r.data as { items: PurifyRuleItem[] };
+  },
+  purifyAddRule: async (
+    packId: number,
+    body: Omit<PurifyRuleItem, "id" | "packId" | "isActive">,
+  ) => {
+    const r = await http.post<{ ok: boolean; id: number }>(
+      `/purify/packs/${packId}/rules`,
+      body,
+    );
+    return r.data;
+  },
+  purifyUpdateRule: async (id: number, patch: Partial<PurifyRuleItem>) => {
+    await http.put(`/purify/rules/${id}`, patch);
+  },
+  purifyToggleRule: async (id: number) => {
+    const r = await http.post(`/purify/rules/${id}/toggle`, {});
+    return r.data as { ok: boolean; isActive: boolean };
+  },
+  purifyDeleteRules: async (ids: number[]) => {
+    await http.post("/purify/rules/delete", { ids });
+  },
+  purifyTest: async (text: string, bookName = "", sourceUrl = "") => {
+    const r = await http.post<{
+      content: string;
+      applied: string[];
+      fingerprint: string;
+    }>("/purify/test", { text, bookName, sourceUrl });
+    return r.data;
+  },
+  purifyContent: async (
+    sourceUrl: string,
+    url: string,
+    bookUrl = "",
+    title = "",
+    base = "",
+    name = "",
+  ) => {
+    const params = new URLSearchParams({
+      source_url: sourceUrl,
+      url,
+      book_url: bookUrl,
+      title,
+      base,
+      name,
+    });
+    const r = await http.get<{ content: string; cached: boolean; purified: boolean }>(
+      `/purify/content?${params.toString()}`,
+    );
+    return r.data;
+  },
+  purifyCacheStats: async () => {
+    const r = await http.get("/purify/cache/stats");
+    return r.data as PurifyCacheStats;
+  },
+  purifyClearCache: async (sourceUrl = "", bookUrl = "") => {
+    const params = new URLSearchParams({ source_url: sourceUrl, book_url: bookUrl });
+    const r = await http.delete<{ deleted: number }>(
+      `/purify/cache?${params.toString()}`,
+    );
+    return r.data;
+  },
+
+  /* ------------------------------------------------- home (首页插件) */
+  homeSummary: async () => {
+    const r = await http.get<HomeSummary>("/home/summary");
+    return r.data;
+  },
+  homeHeartbeat: async (bookUrl: string, sourceUrl: string, seconds: number) => {
+    await http.post("/home/heartbeat", { bookUrl, sourceUrl, seconds });
+  },
+  homeDaily: async (days = 14) => {
+    const r = await http.get<{ items: DailyPoint[] }>("/home/daily", {
+      params: { days },
+    });
+    return r.data.items;
+  },
+
+  /* ------------------------------------------------ webdav (备份插件) */
+  webdavGetConfig: async () => {
+    const r = await http.get<WebDavConfigInfo>("/webdav/config");
+    return r.data;
+  },
+  webdavSaveConfig: async (body: {
+    url: string;
+    username: string;
+    password?: string;
+    directory: string;
+    autoBackup: boolean;
+  }) => {
+    const r = await http.put<{ ok: boolean } & WebDavConfigInfo>(
+      "/webdav/config",
+      body,
+    );
+    return r.data;
+  },
+  webdavTest: async () => {
+    const r = await http.post<{ ok: boolean }>("/webdav/test");
+    return r.data;
+  },
+  webdavBackup: async () => {
+    const r = await http.post<{
+      ok?: boolean;
+      file: string;
+      shelf: number;
+      progress: number;
+      readingStats: number;
+    }>("/webdav/backup");
+    return r.data;
+  },
+  webdavBackups: async () => {
+    const r = await http.get<{ items: WebDavBackupItem[] }>("/webdav/backups");
+    return r.data.items;
+  },
+  webdavRestore: async (file: string) => {
+    const r = await http.post<{
+      ok: boolean;
+      shelfAdded: number;
+      shelfUpdated: number;
+      progressUpdated: number;
+      statsMerged: number;
+    }>("/webdav/restore", { file });
+    return r.data;
+  },
+  webdavDeleteBackup: async (name: string) => {
+    await http.delete(`/webdav/backups/${encodeURIComponent(name)}`);
   },
 };
 

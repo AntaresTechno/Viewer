@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import {
   MiuixButton,
   MiuixCard,
@@ -9,10 +9,13 @@ import {
 } from "miuix-vue";
 import { api, errMsg } from "@/api/client";
 import type { EngineInfo, SourceRow } from "@/api/client";
+import { collectGroups, splitGroups } from "@/utils/sourceGroups";
 
 const items = ref<SourceRow[]>([]);
 const engines = ref<EngineInfo[]>([]);
 const keyword = ref("");
+/** 分组筛选；空串 = 全部分组。 */
+const activeGroup = ref("");
 const loading = ref(true);
 const error = ref("");
 
@@ -127,13 +130,21 @@ async function removeSelected(s: SourceRow) {
   }
 }
 
+const groups = computed(() => collectGroups(items.value));
+
 function filtered() {
   const kw = keyword.value.trim().toLowerCase();
-  if (!kw) return items.value;
-  return items.value.filter(
+  let list = items.value;
+  if (activeGroup.value)
+    list = list.filter((s) =>
+      splitGroups(s.sourceGroup).includes(activeGroup.value),
+    );
+  if (!kw) return list;
+  return list.filter(
     (s) =>
       (s.sourceName ?? "").toLowerCase().includes(kw) ||
-      s.sourceUrl.toLowerCase().includes(kw),
+      s.sourceUrl.toLowerCase().includes(kw) ||
+      (s.sourceGroup ?? "").toLowerCase().includes(kw),
   );
 }
 </script>
@@ -147,6 +158,21 @@ function filtered() {
 
     <MiuixInput v-model="keyword" label="搜索书源" single-line class="search" />
 
+    <div v-if="groups.length" class="grp-row" role="group" aria-label="书源分组">
+      <button
+        class="chip"
+        :class="{ selected: !activeGroup }"
+        @click="activeGroup = ''"
+      >全部分组</button>
+      <button
+        v-for="g in groups"
+        :key="g.name"
+        class="chip"
+        :class="{ selected: activeGroup === g.name }"
+        @click="activeGroup = activeGroup === g.name ? '' : g.name"
+      >{{ g.name }}<span class="g-count">{{ g.count }}</span></button>
+    </div>
+
     <MiuixCard :show-indication="false" class="tbl-card">
       <table class="md-table">
         <thead>
@@ -155,7 +181,16 @@ function filtered() {
         <tbody>
           <tr v-for="s in filtered()" :key="s.id">
             <td>{{ s.sourceName || "（未命名）" }}</td>
-            <td>{{ s.sourceGroup || "—" }}</td>
+            <td class="grp-cell">
+              <template v-if="s.sourceGroup">
+                <span
+                  v-for="g in splitGroups(s.sourceGroup)"
+                  :key="g"
+                  class="eng-chip"
+                >{{ g }}</span>
+              </template>
+              <span v-else>—</span>
+            </td>
             <td><code class="src-url">{{ s.sourceUrl }}</code></td>
             <td><span class="eng-chip">{{ engineTitle(s.engine) }}</span></td>
             <td>
@@ -227,6 +262,23 @@ function filtered() {
 .search {
   margin-bottom: 12px;
   max-width: 360px;
+}
+.grp-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.g-count {
+  margin-left: 5px;
+  font-size: 11px;
+  opacity: 0.55;
+}
+/* 分组单元格保持默认表格单元布局（display:flex 会让
+ * vertical-align:middle 失效导致与名称列错位），标签用行内块
+ * 自然参与基线对齐；多分组时在单元格内自动换行。 */
+.grp-cell .eng-chip {
+  margin: 1px 6px 1px 0;
 }
 .tbl-card {
   --app-card-pad: 4px 10px;

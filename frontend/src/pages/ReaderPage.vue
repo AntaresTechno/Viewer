@@ -3,8 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import type { Chapter } from "@/api/client";
-import { detailRoute } from "@/utils/reader";
-import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import { openDetail } from "@/utils/reader";
+import BookDetailHero from "@/components/BookDetailHero.vue";
+import { useAuth as useAuthStore } from "@/stores/auth";
 
 const route = useRoute();
 const router = useRouter();
@@ -15,11 +16,19 @@ let refId: number | null = qId;
 let bookUrl = route.query.book as string ?? "";
 let origin = route.query.origin as string ?? "";
 const bookName = ref(route.query.name as string ?? "未命名");
-const author = ref(route.query.author ?? "");
+const author = ref((route.query.author as string) ?? "");
 const startIndex = route.query.index != null ? Number(route.query.index) : null;
 
-/** 每次打开章节后自动预取的后续章节数 */
-const PREFETCH_COUNT = 5;
+/** 打开章节后自动预取的后续章节数（设置里可调，0 为关闭；上限 20） */
+const PREFETCH_DEFAULT = 5;
+const PREFETCH_MIN = 0;
+const PREFETCH_MAX = 20;
+const prefetchCount = ref(clampPrefetch(Number(localStorage.getItem("reader_prefetch"))));
+
+function clampPrefetch(n: number): number {
+  if (!Number.isFinite(n)) return PREFETCH_DEFAULT;
+  return Math.min(PREFETCH_MAX, Math.max(PREFETCH_MIN, Math.round(n)));
+}
 
 /* ------------------------------------------------------------- state */
 /** 书籍本地缓存档案：打开阅读器全程零书源请求即可展示的基本信息。 */
@@ -48,9 +57,8 @@ const fontSize = ref(Number(localStorage.getItem("reader_font") ?? 17));
 
 const showChapters = ref(false);
 const showSettings = ref(false);
-/** 书籍信息弹层（封面/作者/分类/最新章节/简介，全部来自缓存档案） */
+/** 书籍信息弹层：与书架详情页共用 BookDetailHero 组件（同一张详情视图） */
 const showInfo = ref(false);
-const introLoading = ref(false);
 
 /* paging */
 const pageIndex = ref(0);
@@ -67,6 +75,7 @@ document.title = `${bookName.value} · 阅读`;
 function persistPrefs() {
   localStorage.setItem("reader_mode", mode.value);
   localStorage.setItem("reader_font", String(fontSize.value));
+  localStorage.setItem("reader_prefetch", String(prefetchCount.value));
 }
 
 /* --------------------------------------------------------- data load */
@@ -210,40 +219,26 @@ onMounted(async () => {
 
 onBeforeUnmount(stopTocPoll);
 
-/** 简介缺失时按需从书源补一次详情，并写回本地缓存档案。 */
-async function fetchIntro() {
-  if (introLoading.value) return;
-  introLoading.value = true;
-  try {
-    const info = await api.bookInfo(
-      origin, bookUrl, bookName.value, author.value, profile.value.coverUrl,
-    );
-    profile.value.intro = (info.intro ?? "").trim();
-    profile.value.kind = info.kind?.trim() || profile.value.kind;
-    profile.value.lastChapter = info.lastChapter?.trim() || profile.value.lastChapter;
-    profile.value.tocUrl = info.tocUrl?.trim() || profile.value.tocUrl;
-    if (info.coverUrl) profile.value.coverUrl = info.coverUrl;
-    // 持久化到书籍档案，下次直接缓存展示
-    await api.resolveBook({
-      sourceUrl: origin, bookUrl,
-      name: bookName.value, author: author.value,
-      coverUrl: profile.value.coverUrl,
-      intro: profile.value.intro, kind: profile.value.kind,
-      lastChapter: profile.value.lastChapter, tocUrl: profile.value.tocUrl,
-    });
-  } catch (e) {
-    alert(`简介获取失败：${errMsg(e)}`);
-  } finally {
-    introLoading.value = false;
-  }
-}
-
 /** 正文插图统一走后端缓存代理：防盗链 + 磁盘缓存防失效。 */
 function proxyImages(paragraph: string): string {
   return paragraph.replace(/src="([^"]+)"/g, (_m, u: string) => {
     if (u.startsWith("data:")) return `src="${u}"`;
     return `src="${coverProxyUrl(u)}"`;
   });
+}
+
+/** 拉取一章正文并切成段落数组（打开章节 / 无限加载共用）。 */
+async function fetchParagraphs(idx: number): Promise<string[]> {
+  const ch = chapters.value[idx];
+  const r = await api.content(
+    origin, ch.url, ch.baseUrl, ch.title ?? "", bookName.value, bookUrl,
+    chapters.value[idx + 1]?.url ?? "",
+    ch.isVolume,
+  );
+  return r.content
+    .split(/\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
 }
 
 async function openChapter(idx: number, restoreOffset = 0) {
@@ -254,16 +249,18 @@ async function openChapter(idx: number, restoreOffset = 0) {
   loadingContent.value = true;
   paragraphs.value = [];
   try {
-    const ch = chapters.value[idx];
-    const r = await api.content(
-      origin, ch.url, ch.baseUrl, ch.title ?? "", bookName.value, bookUrl,
-      chapters.value[idx + 1]?.url ?? "",
-    );
-    paragraphs.value = r.content
-      .split(/\n+/)
-      .map((p) => p.trim())
-      .filter(Boolean);
-    void api.saveProgress(bookUrl, idx, ch.title ?? "", 0);
+    paragraphs.value = await fetchParagraphs(idx);
+    // 滑动模式：重置为单章窗口，之后由滚动触发的无限加载向外扩展
+    sections.value = [{
+      idx,
+      title: chapters.value[idx]?.title ?? "",
+      paragraphs: paragraphs.value,
+    }];
+    loadingNext.value = false;
+    loadingPrev.value = false;
+    nextError.value = false;
+    prevError.value = false;
+    void api.saveProgress(bookUrl, idx, chapters.value[idx].title ?? "", 0);
     prefetchUpcoming(idx);
     await nextTick();
     if (mode.value === "scroll") {
@@ -280,14 +277,101 @@ async function openChapter(idx: number, restoreOffset = 0) {
   }
 }
 
-/** 预取当前章之后的 N 章（后端缓存，默认 5 章），失败静默。 */
+/**
+ * 预取当前章之后的 N 章（后端缓存，N 可在设置里调，默认 5），失败静默。
+ * 列表多带 1 章作为「下一章」指针：正文接口的缓存键包含下一章地址，
+ * 不带指针的话最后一条预取的键与真实读取不一致，缓存永远命中不了。
+ */
 function prefetchUpcoming(idx: number) {
+  const n = prefetchCount.value;
+  if (n <= 0) return;
   const upcoming = chapters.value
-    .slice(idx + 1, idx + 1 + PREFETCH_COUNT)
+    .slice(idx + 1, idx + 1 + n + 1)
     .map((c) => ({ url: c.url, title: c.title ?? "", base: c.baseUrl, isVolume: c.isVolume }));
   if (upcoming.length) {
     void api.prefetchContent(origin, upcoming).catch(() => {});
   }
+}
+
+/* ------------------------------------------------ 滑动模式无限加载 */
+interface Section { idx: number; title: string; paragraphs: string[] }
+/** 已拼接进滚动正文的连续章节窗口（idx 连续）。 */
+const sections = ref<Section[]>([]);
+const loadingNext = ref(false);
+const loadingPrev = ref(false);
+const nextError = ref(false);
+const prevError = ref(false);
+
+/** 追加下一章到窗口末尾（滚动近底部时触发）。 */
+async function loadNextSection(): Promise<void> {
+  if (mode.value !== "scroll" || loadingContent.value || loadingNext.value) return;
+  const last = sections.value[sections.value.length - 1];
+  if (!last || last.idx >= chapters.value.length - 1) return;
+  loadingNext.value = true;
+  nextError.value = false;
+  try {
+    const nidx = last.idx + 1;
+    const ps = await fetchParagraphs(nidx);
+    sections.value.push({ idx: nidx, title: chapters.value[nidx]?.title ?? "", paragraphs: ps });
+    prefetchUpcoming(nidx);
+  } catch {
+    nextError.value = true;
+  } finally {
+    loadingNext.value = false;
+  }
+}
+
+/** 前插上一章到窗口开头，并把滚动位置补偿到原内容顶部（视口不跳动）。 */
+async function loadPrevSection(): Promise<void> {
+  if (mode.value !== "scroll" || loadingContent.value || loadingPrev.value) return;
+  const first = sections.value[0];
+  if (!first || first.idx <= 0) return;
+  loadingPrev.value = true;
+  prevError.value = false;
+  const el = bodyEl.value;
+  const beforeH = el?.scrollHeight ?? 0;
+  const beforeTop = el?.scrollTop ?? 0;
+  try {
+    const pidx = first.idx - 1;
+    const ps = await fetchParagraphs(pidx);
+    sections.value.unshift({ idx: pidx, title: chapters.value[pidx]?.title ?? "", paragraphs: ps });
+    await nextTick();
+    if (el) el.scrollTop = el.scrollHeight - beforeH + beforeTop;
+  } catch {
+    prevError.value = true;
+  } finally {
+    loadingPrev.value = false;
+  }
+}
+
+let sectionRaf = 0;
+
+/** 视口上部 ~40% 落在哪个章节块内，哪章就是「当前章」（驱动进度保存与指示器）。 */
+function updateActiveSection() {
+  const el = bodyEl.value;
+  if (!el || !sections.value.length) return;
+  const marker = el.getBoundingClientRect().top + Math.min(el.clientHeight * 0.4, 280);
+  let act = sections.value[0].idx;
+  el.querySelectorAll<HTMLElement>("[data-sec]").forEach((n) => {
+    const v = Number(n.dataset.sec);
+    if (n.getBoundingClientRect().top <= marker && !Number.isNaN(v)) act = v;
+  });
+  if (act !== current.value && chapters.value[act]) {
+    current.value = act;
+    // 保持 paragraphs 与当前章一致：切到翻页模式 / 进度保存都依赖它
+    const sec = sections.value.find((s) => s.idx === act);
+    if (sec) paragraphs.value = sec.paragraphs;
+    scheduleSave();
+    prefetchUpcoming(act);
+  }
+}
+
+/** 近底部自动追加下一章；近顶部且还有上一章时自动前插。 */
+function maybeLoadSections() {
+  const el = bodyEl.value;
+  if (!el || mode.value !== "scroll" || loadingContent.value) return;
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 600) void loadNextSection();
+  if (el.scrollTop <= 160 && sections.value.length && sections.value[0].idx > 0) void loadPrevSection();
 }
 
 async function nextChapter() {
@@ -381,19 +465,68 @@ function scheduleSave() {
 }
 
 function onScroll() {
-  if (mode.value === "scroll") scheduleSave();
+  if (mode.value !== "scroll") return;
+  scheduleSave();
+  if (sectionRaf) return; // 已有帧排队
+  sectionRaf = requestAnimationFrame(() => {
+    sectionRaf = 0;
+    updateActiveSection();
+    maybeLoadSections();
+  });
+}
+
+/* --------------------------------------------- 阅读时长心跳（首页插件） */
+const auth = useAuthStore();
+/** 心跳间隔（秒）：页面可见且在阅读器内时，每 30s 上报一次在读时长 */
+const BEAT_SECONDS = 30;
+let beatTimer: number | null = null;
+let lastBeatAt = 0;
+
+function beatTick() {
+  if (!auth.can("home.stats.write")) return;
+  // 书籍参数是异步解析的：bookUrl 就绪后才真正上报
+  if (!bookUrl) return;
+  if (document.visibilityState !== "visible") return;
+  lastBeatAt = Date.now();
+  void api.homeHeartbeat(bookUrl, origin, BEAT_SECONDS).catch(() => {});
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  lastBeatAt = Date.now();
+  beatTimer = window.setInterval(beatTick, BEAT_SECONDS * 1000);
+}
+
+function stopHeartbeat() {
+  if (beatTimer !== null) {
+    window.clearInterval(beatTimer);
+    beatTimer = null;
+  }
+  // 离开阅读器时把不足一个周期的剩余时长也上报掉（>10s 才值得发请求）
+  if (
+    auth.can("home.stats.write") && bookUrl
+    && document.visibilityState === "visible"
+  ) {
+    const rest = Math.floor((Date.now() - lastBeatAt) / 1000);
+    if (rest >= 10) {
+      void api.homeHeartbeat(bookUrl, origin, rest).catch(() => {});
+    }
+  }
 }
 
 onMounted(() => {
   bodyEl.value?.addEventListener("scroll", onScroll, { passive: true });
   window.addEventListener("resize", onResize);
   window.addEventListener("keydown", onKeydown);
+  startHeartbeat();
 });
 onBeforeUnmount(() => {
   bodyEl.value?.removeEventListener("scroll", onScroll);
   window.removeEventListener("resize", onResize);
   window.removeEventListener("keydown", onKeydown);
   if (saveTimer !== null) window.clearTimeout(saveTimer);
+  if (sectionRaf) cancelAnimationFrame(sectionRaf);
+  stopHeartbeat();
 });
 
 async function onResize() {
@@ -438,6 +571,7 @@ function onKeydown(e: KeyboardEvent) {
   } else if (e.key === "Escape") {
     showChapters.value = false;
     showSettings.value = false;
+    showInfo.value = false;
   }
 }
 
@@ -451,6 +585,14 @@ function switchMode(m: Mode) {
   const was = mode.value;
   mode.value = m;
   persistPrefs();
+  // 进入滑动模式时若还没有已加载章节窗口，用当前章初始化（无限加载起点）
+  if (m === "scroll" && !sections.value.length && current.value >= 0 && paragraphs.value.length) {
+    sections.value = [{
+      idx: current.value,
+      title: chapters.value[current.value]?.title ?? "",
+      paragraphs: paragraphs.value,
+    }];
+  }
   // 切换模式后按比例换算，尽量停留在同一阅读位置
   void nextTick(async () => {
     if (m === "paged") {
@@ -483,13 +625,20 @@ function changeFont(delta: number) {
   });
 }
 
+function changePrefetch(delta: number) {
+  prefetchCount.value = clampPrefetch(prefetchCount.value + delta);
+  persistPrefs();
+  // 调大后立刻按当前章重新预取一轮
+  if (delta > 0 && current.value >= 0) prefetchUpcoming(current.value);
+}
+
 function goDetail() {
   if (refId != null) {
     // 详情页短链：直接读 book_refs 缓存档案，避免拼超长 query
     void router.push(`/book/ref/${refId}`);
     return;
   }
-  void router.push(detailRoute({
+  void openDetail(router, {
     sourceUrl: origin,
     bookUrl,
     name: bookName.value,
@@ -499,7 +648,7 @@ function goDetail() {
     kind: profile.value.kind,
     lastChapter: profile.value.lastChapter,
     tocUrl: profile.value.tocUrl,
-  }));
+  });
 }
 
 function goBack() {
@@ -526,24 +675,35 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
     </header>
 
     <!-- settings popover -->
-    <div v-if="showSettings" class="settings-pop" @click.stop>
-      <div class="set-row">
-        <span class="lbl">阅读模式</span>
-        <div class="seg">
-          <button :class="{ on: mode === 'scroll' }" @click="switchMode('scroll')">滑动</button>
-          <button :class="{ on: mode === 'paged' }" @click="switchMode('paged')">翻页</button>
+    <Transition name="pop">
+      <div v-if="showSettings" class="settings-pop" @click.stop>
+        <div class="set-row">
+          <span class="lbl">阅读模式</span>
+          <div class="seg">
+            <button :class="{ on: mode === 'scroll' }" @click="switchMode('scroll')">滑动</button>
+            <button :class="{ on: mode === 'paged' }" @click="switchMode('paged')">翻页</button>
+          </div>
         </div>
-      </div>
-      <div class="set-row">
-        <span class="lbl">字号</span>
-        <div class="seg">
-          <button @click="changeFont(-1)">A−</button>
-          <span class="fs-num">{{ fontSize }}</span>
-          <button @click="changeFont(1)">A＋</button>
+        <div class="set-row">
+          <span class="lbl">字号</span>
+          <div class="seg">
+            <button @click="changeFont(-1)">A−</button>
+            <span class="fs-num">{{ fontSize }}</span>
+            <button @click="changeFont(1)">A＋</button>
+          </div>
         </div>
+        <div class="set-row">
+          <span class="lbl">预加载章节</span>
+          <div class="seg">
+            <button title="减少预加载数" @click="changePrefetch(-1)">−</button>
+            <span class="fs-num">{{ prefetchCount }}</span>
+            <button title="增加预加载数" @click="changePrefetch(1)">＋</button>
+          </div>
+        </div>
+        <p v-if="mode === 'paged'" class="hint">点击屏幕左/右侧或左右滑动翻页；键盘 ← → 可用。</p>
+        <p v-else class="hint">上下滚动到章节边缘会自动加载上一章 / 下一章。</p>
       </div>
-      <p v-if="mode === 'paged'" class="hint">点击屏幕左/右侧或左右滑动翻页；键盘 ← → 可用。</p>
-    </div>
+    </Transition>
 
     <!-- body：唯一滚动容器（页面本体不滚动，顶栏/底栏恒贴屏） -->
     <main ref="bodyEl" class="body">
@@ -568,16 +728,27 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
           <button class="btn" @click="openChapter(current)">重试</button>
         </div>
 
-        <!-- 章节内容：切换上一章/下一章时淡入淡出过渡（appear 保证每次挂载都播放入场动画） -->
-        <Transition v-else name="chapter" mode="out-in" appear>
-          <!-- 滑动模式 -->
-          <article
-            v-if="mode === 'scroll'"
-            :key="current"
-            class="content scroll-mode"
-            :style="{ fontSize: fontSize + 'px' }"
+        <!-- 滑动模式：已加载的连续章节拼接滚动，上下滚动无限加载。
+             不参与切章过渡 —— current 随滚动实时变化，keyed 过渡会整页重挂载 -->
+        <article
+          v-else-if="mode === 'scroll'"
+          class="content scroll-mode"
+          :style="{ fontSize: fontSize + 'px' }"
+        >
+          <div v-if="sections.length && sections[0].idx > 0" class="inf-sentinel">
+            <button class="btn" :disabled="loadingPrev" @click="loadPrevSection">
+              {{ loadingPrev ? "正在加载上一章…" : prevError ? "上一章加载失败 · 点击重试" : "加载上一章" }}
+            </button>
+          </div>
+
+          <section
+            v-for="s in sections"
+            :key="s.idx"
+            class="sec-block"
+            :data-sec="s.idx"
           >
-            <template v-for="(p, i) in paragraphs" :key="i">
+            <h2 v-if="sections.length > 1" class="sec-heading">{{ s.title }}</h2>
+            <template v-for="(p, i) in s.paragraphs" :key="i">
               <p
                 v-if="p.startsWith('<img')"
                 class="para img-para"
@@ -585,18 +756,22 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
               />
               <p v-else class="para">{{ strip(p) }}</p>
             </template>
-            <div class="chapter-nav">
-              <button class="btn" :disabled="current <= 0" @click="prevChapter">上一章</button>
-              <button
-                class="btn primary"
-                :disabled="current >= chapters.length - 1"
-                @click="nextChapter"
-              >下一章</button>
-            </div>
-          </article>
+          </section>
 
-          <!-- 翻页模式：CSS 多列横向分页 -->
-          <div v-else :key="current" class="paged-viewport" ref="pagedViewport">
+          <div class="inf-sentinel end">
+            <span v-if="loadingNext" class="inf-tip"><span class="spin spin-sm" /> 正在加载下一章…</span>
+            <button v-else-if="nextError" class="btn" @click="loadNextSection">下一章加载失败 · 点击重试</button>
+            <span
+              v-else-if="!sections.length || sections[sections.length - 1].idx >= chapters.length - 1"
+              class="inf-tip"
+            >已是最后一章</span>
+            <span v-else class="inf-tip">继续下滑，自动加载下一章</span>
+          </div>
+        </article>
+
+        <!-- 翻页模式：CSS 多列横向分页，切章保留淡入淡出过渡 -->
+        <Transition v-else name="chapter" mode="out-in" appear>
+          <div :key="current" class="paged-viewport" ref="pagedViewport">
             <div
               class="paged-content"
               ref="pagedContent"
@@ -626,7 +801,7 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
       <span v-if="mode === 'paged'" class="pos">{{ pageIndex + 1 }} / {{ pageCount }}</span>
       <span v-else class="pos">{{ current + 1 }} / {{ chapters.length }}</span>
       <button
-        class="btn primary"
+        class="btn"
         :disabled="current >= chapters.length - 1"
         @click.stop="nextChapter"
       >下一章</button>
@@ -655,39 +830,22 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
       </div>
     </Transition>
 
-    <!-- book info sheet：全部来自本地缓存档案，不现场请求书源 -->
+    <!-- 书籍信息弹层：与书架/搜索进入的详情页共用 BookDetailHero（统一详情视图） -->
     <Transition name="drawer">
       <div v-if="showInfo" class="drawer-mask" @click.self="showInfo = false">
         <aside class="drawer info-drawer" @click.stop>
-          <div class="info-head">
-            <img
-              class="info-cover"
-              :src="profile.coverUrl ? coverProxyUrl(profile.coverUrl) : FALLBACK_COVER_SVG"
-              alt=""
-              loading="lazy"
-              @error="onCoverError($event, profile.coverUrl)"
-            >
-            <div class="info-meta">
-              <div class="info-name">{{ bookName }}</div>
-              <div class="info-author">{{ author || "佚名" }}</div>
-              <div v-if="profile.kind" class="info-kind">{{ profile.kind }}</div>
-              <div v-if="profile.lastChapter" class="info-last">
-                最新：{{ profile.lastChapter }}
-              </div>
-              <div class="info-count">共 {{ chapters.length }} 章</div>
-            </div>
-          </div>
-          <div class="info-body">
-            <h4 class="info-sec">简介</h4>
-            <p v-if="profile.intro" class="info-intro">{{ profile.intro }}</p>
-            <p v-else class="info-intro empty">暂无简介</p>
-            <button
-              v-if="!profile.intro"
-              class="btn"
-              :disabled="introLoading"
-              @click="fetchIntro"
-            >{{ introLoading ? "获取中…" : "从书源获取简介" }}</button>
-          </div>
+          <BookDetailHero
+            class="info-hero"
+            :origin="origin"
+            :book-url="bookUrl"
+            :name="bookName"
+            :author="author"
+            :kind="profile.kind"
+            :intro="profile.intro"
+            :cover-url="profile.coverUrl"
+            :last-chapter="profile.lastChapter"
+            :chapter-count="chapters.length"
+          />
           <div class="info-foot">
             <button class="btn" @click="showInfo = false">关闭</button>
             <button class="btn primary" @click="showInfo = false; goDetail()">查看详情页</button>
@@ -810,11 +968,6 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
 }
 .img-para { text-indent: 0; text-align: center; }
 .img-para :deep(img) { max-width: 100%; border-radius: 8px; }
-.chapter-nav {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 28px;
-}
 .btn {
   border: 1px solid rgba(0, 0, 0, 0.14);
   background: var(--m-color-surface-container, #f3f1ee);
@@ -834,12 +987,44 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
 }
 .pos { font-size: 12px; opacity: 0.6; }
 
-/* ---- 章节切换动画：上一章/下一章 淡入淡出 ---- */
+/* ---- 章节切换动画：翻页模式切章淡入淡出 ---- */
 .chapter-enter-active, .chapter-leave-active {
   transition: opacity 0.22s ease, transform 0.22s ease;
 }
 .chapter-enter-from { opacity: 0; transform: translateY(10px); }
 .chapter-leave-to { opacity: 0; transform: translateY(-10px); }
+
+/* ---- 滑动模式无限加载：章节块拼接 + 边缘哨兵 ---- */
+.sec-block + .sec-block {
+  margin-top: 2.4em;
+  padding-top: 0.4em;
+}
+.sec-heading {
+  margin: 0 0 1em;
+  font-size: 1em;
+  font-weight: 700;
+  opacity: 0.72;
+}
+.inf-sentinel {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 40px;
+  padding: 14px 0 4px;
+}
+.inf-sentinel.end { padding-bottom: 28px; }
+.inf-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  opacity: 0.55;
+}
+.spin-sm {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
 
 /* ---- 翻页模式 ---- */
 .paged-viewport {
@@ -875,6 +1060,34 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
   display: grid;
   gap: 12px;
   min-width: 240px;
+  /* 锚定在顶栏「Aa」按钮下方：从触发处长出，而不是凭空出现 */
+  transform-origin: top right;
+}
+/* 弹层过渡：淡入 + 从触发方向轻微缩放收拢；出场同路径、稍快 */
+.pop-enter-active {
+  transition:
+    opacity 0.18s var(--app-ease-calm, cubic-bezier(0.22, 0.61, 0.36, 1)),
+    transform 0.18s var(--app-ease-calm, cubic-bezier(0.22, 0.61, 0.36, 1));
+}
+.pop-leave-active {
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+.pop-enter-from,
+.pop-leave-to {
+  opacity: 0;
+  transform: scale(0.96) translateY(-4px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pop-enter-active,
+  .pop-leave-active {
+    transition: opacity 0.15s ease;
+  }
+  .pop-enter-from,
+  .pop-leave-to {
+    transform: none;
+  }
 }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .lbl { font-size: 13px; opacity: 0.75; }
@@ -960,77 +1173,23 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
 .drawer-enter-active, .drawer-leave-active { transition: opacity 0.15s ease; }
 .drawer-enter-from, .drawer-leave-to { opacity: 0; }
 
-/* ---- 书籍信息弹层（缓存档案展示） ---- */
+/* ---- 书籍信息弹层：内嵌与书架详情页共用的 BookDetailHero ---- */
 .info-drawer {
   display: flex;
   flex-direction: column;
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
-.info-head {
-  display: flex;
-  gap: 14px;
-  padding: 16px 14px 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-}
-.info-cover {
-  width: 92px;
-  height: 124px;
-  object-fit: cover;
-  border-radius: 10px;
-  background: var(--m-color-surface-container-high, #eceae7);
-  flex: none;
-}
-.info-meta { min-width: 0; align-self: center; }
-.info-name {
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.35;
-  word-break: break-word;
-}
-.info-author {
-  margin-top: 4px;
-  font-size: 13px;
-  opacity: 0.65;
-}
-.info-kind {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--m-color-primary, #5b6ac4);
-}
-.info-last {
-  margin-top: 6px;
-  font-size: 11px;
-  opacity: 0.55;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.info-count {
-  margin-top: 2px;
-  font-size: 11px;
-  opacity: 0.55;
-}
-.info-body {
+/* 详情头部作为弹层内的滚动区：圆角卡片浮在抽屉底色上，操作排恒贴底 */
+.info-hero {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 16px;
+  margin: 10px 10px 0;
+  scrollbar-width: none; /* Firefox */
+  /* 抽屉只有 ~340px 宽：收窄组件内边距（布局由组件的容器查询自适应） */
+  --bd-pad: 14px 14px 18px;
 }
-.info-sec {
-  margin: 0 0 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-.info-intro {
-  margin: 0 0 10px;
-  font-size: 13px;
-  line-height: 1.75;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--m-color-on-surface, #1d1b1a);
-  opacity: 0.85;
-}
-.info-intro.empty { opacity: 0.45; }
+.info-hero::-webkit-scrollbar { display: none; } /* Chrome / Edge / Safari */
 .info-foot {
   flex: none;
   display: flex;

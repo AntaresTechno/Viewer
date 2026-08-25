@@ -78,13 +78,42 @@ async def _migrate_sqlite(conn) -> None:
                  "book_url VARCHAR(1024) NOT NULL DEFAULT ''")
         )
 
+    # purify_rules：legado 新版导出格式的作用域字段（正文净化插件）
+    res = await conn.execute(text("PRAGMA table_info(purify_rules)"))
+    cols = {row[1] for row in res.fetchall()}
+    for col in ("scope_content", "scope_title"):
+        if col not in cols:
+            await conn.execute(
+                text(f"ALTER TABLE purify_rules ADD COLUMN {col} "
+                     "BOOLEAN NOT NULL DEFAULT "
+                     f"{'1' if col == 'scope_content' else '0'}")
+            )
+
+    # shelf_items：书源侧更新时间与「有更新」徽标（首页/书架排序）
+    res = await conn.execute(text("PRAGMA table_info(shelf_items)"))
+    cols = {row[1] for row in res.fetchall()}
+    if "updated_at" not in cols:
+        await conn.execute(
+            text("ALTER TABLE shelf_items ADD COLUMN updated_at DATETIME")
+        )
+        # 老数据以加入书架的时间作为初始更新时间
+        await conn.execute(
+            text("UPDATE shelf_items SET updated_at = created_at "
+                 "WHERE updated_at IS NULL")
+        )
+    if "has_update" not in cols:
+        await conn.execute(
+            text("ALTER TABLE shelf_items ADD COLUMN has_update "
+                 "BOOLEAN NOT NULL DEFAULT 0")
+        )
+
 
 async def init_db() -> None:
     """Create tables and seed defaults (roles, admin user)."""
     from sqlalchemy import select
 
     from .security import hash_password
-    from ..models import Role, User
+    from ..models import AppKV, Role, User
     from ..plugins.registry import all_permission_keys
 
     factory = get_session_factory()
@@ -102,6 +131,8 @@ async def init_db() -> None:
                 "books.shelf.read", "books.shelf.write",
                 "books.sources.read", "books.search", "books.explore",
                 "books.toc", "books.content", "books.progress.write",
+                # 首页插件（最近阅读 / 阅读统计）
+                "home.read", "home.stats.write",
             ]),
             "guest": ("访客", ["auth.basic"]),
         }
@@ -110,6 +141,17 @@ async def init_db() -> None:
         for name, (desc, perms) in roles.items():
             if name not in by_name:
                 session.add(Role(name=name, description=desc, permissions=perms))
+
+        # 一次性为旧库补种后加的默认权限（只跑一次，之后以界面编辑为准）
+        seeded = await session.get(AppKV, "seeded_default_perms")
+        if seeded is None:
+            session.add(AppKV(key="seeded_default_perms", value="v2"))
+            user_role = by_name.get("user")
+            if user_role is not None:
+                have = set(user_role.permissions or [])
+                user_role.permissions = sorted(
+                    have | {"home.read", "home.stats.write"}
+                )
 
         # default admin account
         has_user = (

@@ -76,6 +76,15 @@ def set_disabled_plugins(disabled: set[str]) -> None:
     _DISABLED_PLUGINS = set(disabled)
 
 
+def plugin_enabled(name: str) -> bool:
+    """Whether an API plugin is currently enabled (live view, no DB hit).
+
+    Plugins may call this to delegate behavior to each other without a hard
+    dependency: when disabled the caller falls back to its own code path.
+    """
+    return name not in _DISABLED_PLUGINS
+
+
 def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
     global _CACHE, _ENGINE_CACHE
     if _CACHE is not None and not force:

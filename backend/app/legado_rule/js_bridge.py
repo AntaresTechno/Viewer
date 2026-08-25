@@ -260,6 +260,12 @@ def _to_jsonable(obj: Any) -> Any:
         return obj
     if isinstance(obj, bytes):
         return obj.decode("utf-8", "replace")
+    # lxml 元素 → 外层 HTML（与旧 bs4 引擎的 str/repr 行为保持一致，
+    # 否则 JS 规则拿到的是 "<Element div at 0x...>" 对象描述）。
+    from .analyzer_css import HTML_ELEMENT, _outer_html
+
+    if isinstance(obj, HTML_ELEMENT):
+        return _outer_html(obj)
     if isinstance(obj, dict):
         return {str(k): _to_jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -379,13 +385,40 @@ class JsEvaluator:
             raise JsUnavailableError(f"JS 绑定初始化失败: {exc}") from exc
 
     # ----------------------------------------------------------------- eval
+    def set_binding(self, key: str, value: Any) -> None:
+        """原地更新一个绑定变量（如逐条规则变化中的 result）。
+
+        quickjs：直接在既有上下文里重定义 var；dukpy：vars 每次求值时
+        传入，更新字典即可。两者都无需重建运行时。
+        """
+        if not key.isidentifier():
+            return
+        value = _safe_json(value)
+        if self.engine == "quickjs":
+            try:
+                self._quickjs_ctx.eval(
+                    f"var {key} = {json.dumps(value, ensure_ascii=False)};"
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise JsUnavailableError(f"JS 绑定更新失败: {exc}") from exc
+        else:
+            self._dukpy_vars[key] = value
+
     def eval(self, code: str) -> Any:
         try:
             if self.engine == "quickjs":
                 result = js_unwrap(self._quickjs_ctx.eval(code))
             else:
+                # dukpy 的全局作用域跨 evaljs 持久，但预检只执行过一次
+                # 「var x = dukpy['x']」绑定；set_binding 更新的是传入的
+                # vars 字典。因此每次求值前先把当前 vars 重绑到全局，
+                # 保证规则读到的是最新值。
+                binds = ";".join(
+                    f"{k} = dukpy[{json.dumps(k)}]"
+                    for k in self._dukpy_vars if k.isidentifier()
+                )
                 result = self._dukpy_interp.evaljs(
-                    code + "\n;", **self._dukpy_vars
+                    binds + "\n" + code + "\n;", **self._dukpy_vars
                 )
         except JsUnavailableError:
             raise
