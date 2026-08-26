@@ -19,6 +19,15 @@ viewer/
     └── source-flow.md  # WebBook 搜索→详情→目录→正文流程
 ```
 
+## 文档索引
+
+| 文档 | 用途 |
+|---|---|
+| [部署指南](docs/deployment.md) | 长期对外部署：systemd 常驻、反向代理/HTTPS、安全加固、备份与升级 |
+| [环境安装指南](docs/installation-guide.md) | 本机安装 / 二次开发：一键脚本、手动安装、`.env` 配置、FAQ |
+| [架构总览](docs/architecture.md) | 插件架构与模块关系 |
+| [规则语义规格](docs/spec/*.md) | Legado 规则引擎三份语义规格（由本仓库 `legado-with-MD3-main` 源码整理） |
+
 ## 快速开始
 
 ### 后端（Python ≥3.11，已在 3.14 验证）

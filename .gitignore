@@ -32,6 +32,8 @@ frontend/dist/
 dist/
 *.local
 .vite/
+# build.bat / start.bat 会把 npm 缓存写到仓库根目录 .cache/
+.cache/
 
 # 日志
 *.log
@@ -62,3 +64,12 @@ $RECYCLE.BIN/
 
 # 下载的书籍源配置文件
 3f067eb2.json
+
+# ===== Python 打包/构建产物 =====
+*.egg-info/
+.eggs/
+build/
+
+# ===== 上游规则引擎整棵源码（仅本地参考，不入库）=====
+# 规则移植的参考来源，规格已提取到 docs/spec/；需要时单独获取
+legado-with-MD3-main/
