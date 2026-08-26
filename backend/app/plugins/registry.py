@@ -52,6 +52,9 @@ class PluginInfo:
     permissions: list[tuple[str, str]]
     create_router: Any | None
     module_name: str
+    # 可选：挂在站点根路径（/api 之外）的路由工厂，如 WebDAV 服务端 /dav
+    mount_root: str | None = None
+    create_root_router: Any | None = None
 
 
 @dataclasses.dataclass
@@ -108,6 +111,7 @@ def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
             continue
         meta = getattr(module, "meta", None)
         create_router = getattr(module, "create_router", None)
+        create_root_router = getattr(module, "create_root_router", None)
         engine_meta = getattr(module, "ENGINE", None)
         create_engine = getattr(module, "create_engine", None)
         if not isinstance(meta, dict):
@@ -124,6 +128,8 @@ def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
             permissions=[tuple(p) for p in meta.get("permissions", [])],
             create_router=create_router,
             module_name=module.__name__,
+            mount_root=meta.get("mount_root") if create_root_router else None,
+            create_root_router=create_root_router if meta.get("mount_root") else None,
         )
         found[info.name] = info
         if isinstance(engine_meta, dict) and create_engine is not None:

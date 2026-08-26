@@ -335,6 +335,38 @@ class WebDavConfig(Base):
         DateTime(timezone=True), nullable=True, default=None
     )
     last_backup_file: Mapped[str] = mapped_column(String(256), default="")
+    # ---- WebDAV 服务端（legado 进度同步专用路径 /dav/...）----
+    dav_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 独立访问密码（pbkdf2 哈希），与登录密码分离；不回显
+    dav_secret_hash: Mapped[str] = mapped_column(Text, default="")
+    last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
+
+class DavResource(Base):
+    """WebDAV 服务端存储的 legado 同步资源（bookProgress/*.json）。
+
+    legado 客户端把阅读进度 PUT 成 ``bookProgress/{书名}_{作者}.json``，
+    本站原样保存 JSON（保证 legado 端可读回），并在书架里能按 书名+作者
+    匹配到时同步合并进 ReadProgress；网页端的阅读进度也会反向合成为
+    同名进度文件供 legado 拉取。
+    """
+
+    __tablename__ = "dav_resources"
+    __table_args__ = (
+        UniqueConstraint("user_id", "path", name="uq_dav_resource_path"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    # 相对命名空间根的路径，如 "bookProgress/斗破苍穹_天蚕土豆.json"
+    path: Mapped[str] = mapped_column(String(512), index=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class AppKV(Base):

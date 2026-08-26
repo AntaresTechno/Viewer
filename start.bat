@@ -28,10 +28,10 @@ if not exist "frontend\dist\index.html" (
     if errorlevel 1 goto :err
 )
 
-echo [start] Viewer running at http://127.0.0.1:8000/  (Ctrl+C to stop)
+echo [start] Viewer running at http://0.0.0.0:8000/  (LAN: http://<your-ip>:8000/)  (Ctrl+C to stop)
 start "" cmd /c "timeout /t 3 >nul & start http://127.0.0.1:8000/"
 pushd backend
-"%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+"%PY%" -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 popd
 goto :eof
 
@@ -49,10 +49,10 @@ if not exist "frontend\node_modules" (
     popd
 )
 start "viewer-vite" cmd /k "cd /d %~dp0frontend && npm run dev"
-echo [start] vite dev server: http://localhost:5173/  ^(proxies /api to :8000^)
+echo [start] vite dev server: http://0.0.0.0:5173/  ^(proxies /api to :8000; LAN: http://<your-ip>:5173/^)
 start "" cmd /c "timeout /t 4 >nul & start http://localhost:5173/"
 pushd backend
-"%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+"%PY%" -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 popd
 goto :eof
 

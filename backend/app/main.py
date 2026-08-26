@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -48,6 +48,19 @@ def create_app() -> FastAPI:
     known = set(discover_plugins().keys())
     enabled = enabled_plugin_names()
     set_disabled_plugins(known - enabled)
+
+    # 缓存策略：HTML 页面（含 SPA 回退页）强制协商缓存，更新后浏览器立刻
+    # 拿到新版本；接口与 DAV 响应不缓存；带 hash 的 /assets 资源保持默认。
+    @app.middleware("http")
+    async def _cache_headers(request: Request, call_next):
+        response = await call_next(request)
+        p = request.url.path
+        if p.startswith("/api/") or p == "/api" or p.startswith("/dav/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        elif "text/html" in response.headers.get("content-type", ""):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
     api_root = f"/api"
     mounted: list[str] = []
 
@@ -59,6 +72,12 @@ def create_app() -> FastAPI:
         router = info.create_router(ctx)
         app.include_router(router, prefix=f"{api_root}/{info.mount}")
         mounted.append(info.mount)
+        # 可选的站点根路径路由（如 WebDAV 服务端 /dav）
+        if info.create_root_router is not None and info.mount_root:
+            app.include_router(
+                info.create_root_router(ctx), prefix=f"/{info.mount_root}"
+            )
+            mounted.append(f"{info.mount_root} (root)")
 
     @app.get("/api/health")
     async def health():
@@ -74,6 +93,14 @@ def create_app() -> FastAPI:
 
         class _SPA(StaticFiles):
             async def get_response(self, path: str, scope):  # type: ignore[override]
+                # 未匹配的 /api 路径不回退到前端页面：避免旧进程/未启用插件时
+                # 接口请求被静默吞成 HTML（GET 返回 index.html、POST 变 405）
+                # 注意 Windows 上 path 分隔符可能是 "\"
+                rel = path.replace("\\", "/").lstrip("/")
+                if rel == "api" or rel.startswith("api/"):
+                    from starlette.responses import JSONResponse
+
+                    return JSONResponse({"detail": "Not Found"}, status_code=404)
                 try:
                     response = await super().get_response(path, scope)
                 except StarletteHTTPException as exc:
@@ -97,4 +124,4 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

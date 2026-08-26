@@ -9,17 +9,24 @@
 - ``POST /api/webdav/restore``      按文件名恢复（合并语义，不删除本地已有）
 - ``DELETE /api/webdav/backups/{name}`` 删除远端某份备份
 
+同时内置 **WebDAV 服务端**（legado 进度同步专用路径 ``/dav``）：
+
+- ``GET  /api/webdav/server``        查询服务端状态/地址/账号
+- ``PUT  /api/webdav/server``        开启或关闭服务端
+- ``POST /api/webdav/server/secret`` 生成/重置独立访问密码（仅返回一次）
+
 每日自动备份由 daily_refresh 服务在目录刷新后触发（配置里 auto_backup 开启）。
 """
 
 import base64
 import json as _json
 import re
+import secrets
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,10 +34,12 @@ meta = {
     "name": "webdav",
     "mount": "webdav",
     "title": "WebDAV 备份",
-    "version": "1.0.0",
-    "description": "书架/进度/统计备份到 WebDAV 网盘，支持每日自动备份与恢复",
+    "version": "1.1.0",
+    "description": "书架/进度/统计备份到 WebDAV 网盘；内置 legado 兼容的 WebDAV 服务端（/dav 进度同步）",
     "order": 40,
     "permissions": [("webdav.use", "使用 WebDAV 备份/同步")],
+    # 站点根路径专用路由：legado 同步服务端（见 dav_server.py）
+    "mount_root": "dav",
 }
 
 _DAV_NS = "{DAV:}"
@@ -286,12 +295,25 @@ async def run_auto_backup_if_enabled(user_id: int) -> bool:
     return True
 
 
+def create_root_router(ctx):
+    """站点根路径专用路由工厂：legado 进度同步服务端（挂载于 /dav）。"""
+    from .dav_server import create_root_router as _create
+
+    return _create(ctx)
+
+
 def create_router(ctx) -> APIRouter:
     from sqlalchemy import select
 
     from ...core.deps import get_current_user, require_perm
     from ...core.db import get_db
-    from ...models import ReadingStat, ReadProgress, ShelfItem, WebDavConfig
+    from ...models import (
+        DavResource,
+        ReadingStat,
+        ReadProgress,
+        ShelfItem,
+        WebDavConfig,
+    )
 
     def _aware(dt):
         """SQLite 常返回 naive datetime：补上本地时区便于与远端时间比较。"""
@@ -572,5 +594,98 @@ def create_router(ctx) -> APIRouter:
         if status not in (200, 202, 204, 404):
             raise _http_error(status, body, "删除备份")
         return {"ok": True}
+
+    # ------------------------------------------------- WebDAV 服务端（legado 同步）
+    @router.get("/server")
+    async def get_server(
+        request: Request,
+        current=Depends(require_perm("webdav.use")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """服务端状态：开关、专用路径地址、账号、最近同步时间。"""
+        user, _ = current
+        c = await db.get(WebDavConfig, user.id)
+        base = str(request.base_url).rstrip("/")
+        return {
+            "enabled": bool(c is not None and c.dav_enabled),
+            "hasSecret": bool(c is not None and c.dav_secret_hash),
+            # legado 里配置的 WebDAV 地址（专用路径）
+            "url": f"{base}/dav/legado/",
+            "account": user.username,
+            "lastSyncAt": c.last_sync_at.isoformat() if c and c.last_sync_at else None,
+        }
+
+    class ServerBody(BaseModel):
+        enabled: bool
+
+    @router.put("/server")
+    async def save_server(
+        body: ServerBody,
+        current=Depends(require_perm("webdav.use")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """开启 / 关闭 WebDAV 服务端。"""
+        user, _ = current
+        c = await db.get(WebDavConfig, user.id)
+        if c is None:
+            c = WebDavConfig(user_id=user.id)
+            db.add(c)
+        c.dav_enabled = body.enabled
+        await db.commit()
+        return {"ok": True, "enabled": bool(c.dav_enabled)}
+
+    @router.post("/server/secret")
+    async def reset_server_secret(
+        current=Depends(require_perm("webdav.use")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """生成（或重置）服务端访问密码；明文仅本次返回，之后只存哈希。"""
+        from ...core.security import hash_password
+
+        user, _ = current
+        secret = secrets.token_urlsafe(18)
+        c = await db.get(WebDavConfig, user.id)
+        if c is None:
+            c = WebDavConfig(user_id=user.id)
+            db.add(c)
+        c.dav_secret_hash = hash_password(secret)
+        c.dav_enabled = True  # 生成密码即视为启用
+        await db.commit()
+        return {"ok": True, "secret": secret}
+
+    @router.get("/server/pending")
+    async def server_pending(
+        current=Depends(require_perm("webdav.use")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """待匹配列表：legado 同步过来、但书架里还没有对应书籍的进度文件。
+
+        这些书会在后台用书源自动搜索入库；搜不到的停留在此处，
+        手动在本站搜索加入同名书籍后进度会自动关联。
+        """
+        from .dav_server import _load_locals, _parse_payload
+
+        user, _ = current
+        rows = (await db.execute(
+            select(DavResource).where(
+                DavResource.user_id == user.id,
+                DavResource.path.like("bookProgress/%"),
+            ).order_by(DavResource.updated_at.desc())
+        )).scalars().all()
+        matched = await _load_locals(db, user.id)
+        items = []
+        for r in rows:
+            fname = r.path.split("/", 1)[1]
+            if fname in matched:
+                continue
+            data = _parse_payload(r.content) or {}
+            items.append({
+                "file": fname,
+                "name": str(data.get("name") or ""),
+                "author": str(data.get("author") or ""),
+                "chapterIndex": int(data.get("durChapterIndex") or 0),
+                "updatedAt": r.updated_at.isoformat() if r.updated_at else None,
+            })
+        return {"items": items[:50], "total": len(items)}
 
     return router

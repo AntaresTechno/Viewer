@@ -107,6 +107,20 @@ async def _migrate_sqlite(conn) -> None:
                  "BOOLEAN NOT NULL DEFAULT 0")
         )
 
+    # webdav_configs：WebDAV 服务端（legado 进度同步专用路径）字段
+    res = await conn.execute(text("PRAGMA table_info(webdav_configs)"))
+    cols = {row[1] for row in res.fetchall()}
+    additive = {
+        "dav_enabled": "BOOLEAN NOT NULL DEFAULT 0",
+        "dav_secret_hash": "TEXT NOT NULL DEFAULT ''",
+        "last_sync_at": "DATETIME",
+    }
+    for col, ddl in additive.items():
+        if col not in cols:
+            await conn.execute(
+                text(f"ALTER TABLE webdav_configs ADD COLUMN {col} {ddl}")
+            )
+
 
 async def init_db() -> None:
     """Create tables and seed defaults (roles, admin user)."""
