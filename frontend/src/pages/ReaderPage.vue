@@ -204,6 +204,8 @@ async function startReading() {
 }
 
 onMounted(async () => {
+  document.addEventListener("load", onImgLoadState, true);
+  document.addEventListener("error", onImgLoadState, true);
   try {
     await bootstrapBook();
     document.title = `${bookName.value} · 阅读`;
@@ -217,7 +219,11 @@ onMounted(async () => {
   }
 });
 
-onBeforeUnmount(stopTocPoll);
+onBeforeUnmount(() => {
+  document.removeEventListener("load", onImgLoadState, true);
+  document.removeEventListener("error", onImgLoadState, true);
+  stopTocPoll();
+});
 
 /** 正文插图统一走后端缓存代理：防盗链 + 磁盘缓存防失效。 */
 function proxyImages(paragraph: string): string {
@@ -225,6 +231,18 @@ function proxyImages(paragraph: string): string {
     if (u.startsWith("data:")) return `src="${u}"`;
     return `src="${coverProxyUrl(u)}"`;
   });
+}
+
+/* ---- 正文插图加载占位 ----
+ * 插图由 v-html 注入，无法逐个绑事件；load/error 又不冒泡，
+ * 在 document 上用捕获阶段统一接住，切 li-done / li-failed 状态类
+ * （样式见 base.css 的 .img-para 段）。监听先于任何章节渲染挂上，
+ * 缓存秒出的图也能收到 load，不会把占位留在屏上。 */
+function onImgLoadState(e: Event): void {
+  const t = e.target as Element | null;
+  if (!(t instanceof HTMLImageElement)) return;
+  if (!t.closest(".img-para")) return;
+  t.classList.add(e.type === "error" ? "li-failed" : "li-done");
 }
 
 /** 拉取一章正文并切成段落数组（打开章节 / 无限加载共用）。 */

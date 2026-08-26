@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import LoadingImage from "@/components/LoadingImage.vue";
 
 /**
  * 统一详情头部：书架/搜索/发现进入的详情页与阅读器内「书籍信息」弹层
@@ -102,13 +103,12 @@ onBeforeUnmount(() => window.removeEventListener("resize", measureClamp));
 
     <!-- 封面浮起带投影；大标题始终完整可读，不压入封面底下 -->
     <div class="bd-overlap">
-      <img
+      <LoadingImage
         class="bd-cover"
         :src="coverUrl ? coverProxyUrl(coverUrl) : FALLBACK_COVER_SVG"
         :alt="name"
-        loading="lazy"
         @error="onCoverError($event, coverUrl)"
-      >
+      />
       <div class="bd-side">
         <h1 class="bd-title">{{ name }}</h1>
         <div class="bd-byline">{{ author || "佚名" }}</div>

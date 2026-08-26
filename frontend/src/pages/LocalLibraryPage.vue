@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import LoadingImage from "@/components/LoadingImage.vue";
 import { openDetail } from "@/utils/reader";
 
 interface LibraryBook {
@@ -204,12 +205,12 @@ onBeforeUnmount(() => stopPolling());
         @click="openBook(b)"
       >
         <div class="row">
-          <img
+          <LoadingImage
             class="cover"
             :src="b.coverUrl ? coverProxyUrl(b.coverUrl) : FALLBACK_COVER_SVG"
             @error="onCoverError($event, b.coverUrl)"
             @click.stop
-          >
+          />
           <div class="info">
             <div class="name">{{ b.name }}</div>
             <div class="author">{{ b.author || "佚名" }}</div>

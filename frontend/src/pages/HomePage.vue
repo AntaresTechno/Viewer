@@ -5,6 +5,7 @@ import { MiuixProgressIndicator } from "miuix-vue";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import type { DailyPoint, HomeSummary } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import LoadingImage from "@/components/LoadingImage.vue";
 import { openReader } from "@/utils/reader";
 import { useAuth } from "@/stores/auth";
 
@@ -202,11 +203,10 @@ function continueReading(b: {
             @keydown.enter.prevent="continueReading(b)"
           >
             <span class="ctile-cover">
-              <img
+              <LoadingImage
                 :src="b.coverUrl ? coverProxyUrl(b.coverUrl) : FALLBACK_COVER_SVG"
-                loading="lazy"
                 @error="onCoverError($event, b.coverUrl)"
-              >
+              />
             </span>
             <span class="ctile-name">{{ b.name }}</span>
             <span class="ctile-sub">
@@ -235,11 +235,10 @@ function continueReading(b: {
             @keydown.enter.prevent="continueReading(u)"
           >
             <span class="ctile-cover">
-              <img
+              <LoadingImage
                 :src="u.coverUrl ? coverProxyUrl(u.coverUrl) : FALLBACK_COVER_SVG"
-                loading="lazy"
                 @error="onCoverError($event, u.coverUrl)"
-              >
+              />
               <span class="ctile-badge upd">有更新</span>
             </span>
             <span class="ctile-name">{{ u.name }}</span>

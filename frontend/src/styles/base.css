@@ -319,7 +319,9 @@ textarea:focus {
     0 1px 2px rgba(0, 0, 0, 0.1),
     0 8px 20px -10px rgba(0, 0, 0, 0.28);
 }
-.ctile-cover img {
+/* .li-box = LoadingImage 的占位壳：封面图统一由它承载，尺寸随瓷砖 */
+.ctile-cover img,
+.ctile-cover .li-box {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -401,6 +403,82 @@ textarea:focus {
   height: 100%;
   border-radius: inherit;
   background: var(--m-color-primary);
+}
+
+/* ---- 图片加载占位（配合 <LoadingImage> / 阅读器插图） ----
+ * 未就绪 = 占位底色 + 微光扫过（只动 transform，合成器动画，
+ * 主线程忙也不卡）；就绪后整图淡入。缓存命中在挂载时同步置就绪，
+ * 不播占位、不装忙。减弱动态偏好下退为静态色块 + 快速淡入。 */
+.li-box {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  background: var(--m-color-surface-container-high);
+}
+.li-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* 就绪淡入：opacity-only，减弱动态偏好下也保留（更短） */
+.li-box.is-ready .li-img {
+  animation: li-reveal 0.24s var(--app-ease-calm, ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .li-box.is-ready .li-img {
+    animation-duration: 0.15s;
+  }
+}
+@keyframes li-sweep {
+  to { transform: translateX(100%); }
+}
+@keyframes li-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .li-box:not(.is-ready)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      100deg,
+      transparent 25%,
+      color-mix(in srgb, var(--m-color-on-surface) 9%, transparent) 50%,
+      transparent 75%
+    );
+    animation: li-sweep 1.4s linear infinite;
+  }
+
+  /* 正文插图（阅读器 v-html 注入的 img 无法逐个绑事件，
+   * 由 ReaderPage 在容器上捕获 load/error 切换 li-done / li-failed）。
+   * 占位给一个最低高度撑住版面，加载中缓慢呼吸。 */
+  .img-para img:not(.li-done):not(.li-failed) {
+    min-height: 96px;
+    background: var(--m-color-surface-container-high);
+    animation: li-breathe 1.6s ease-in-out infinite;
+  }
+}
+.img-para img.li-done {
+  animation: li-reveal 0.3s var(--app-ease-calm, ease-out);
+}
+/* 失败/就绪态都撤掉占位高度与底色，交给内容本身 */
+.img-para img.li-done,
+.img-para img.li-failed {
+  min-height: 0;
+  background: none;
+}
+@keyframes li-breathe {
+  50% { opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .img-para img:not(.li-done):not(.li-failed) {
+    min-height: 96px;
+    background: var(--m-color-surface-container-high);
+    animation: none; /* 静态色块即可 */
+  }
 }
 
 /* ---- 空态 ---- */

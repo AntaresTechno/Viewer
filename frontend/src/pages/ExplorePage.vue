@@ -8,6 +8,7 @@ import {
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import type { BookResult, ExploreKind, SourceRow } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import LoadingImage from "@/components/LoadingImage.vue";
 import { openDetail } from "@/utils/reader";
 
 const $router = useRouter();
@@ -147,11 +148,10 @@ async function openBook(b: BookResult) {
         @click="openBook(b)"
       >
         <span class="ctile-cover">
-          <img
+          <LoadingImage
             :src="b.coverUrl ? coverProxyUrl(b.coverUrl) : FALLBACK_COVER_SVG"
-            loading="lazy"
             @error="onCoverError($event, b.coverUrl)"
-          >
+          />
         </span>
         <span class="ctile-name">{{ b.name }}</span>
         <span class="ctile-meta">{{ b.author || "佚名" }}</span>

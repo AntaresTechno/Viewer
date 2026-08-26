@@ -5,6 +5,7 @@ import { MiuixButton, MiuixDialog, MiuixProgressIndicator } from "miuix-vue";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import type { ShelfEntry, ShelfSort } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import LoadingImage from "@/components/LoadingImage.vue";
 import { openDetail, openReader } from "@/utils/reader";
 
 const $router = useRouter();
@@ -173,11 +174,10 @@ function subText(it: ShelfEntry): string {
         @keydown.enter.prevent="openReaderPage(it)"
       >
         <span class="ctile-cover">
-          <img
+          <LoadingImage
             :src="it.coverUrl ? coverProxyUrl(it.coverUrl) : FALLBACK_COVER_SVG"
-            loading="lazy"
             @error="onCoverError($event, it.coverUrl)"
-          >
+          />
           <span
             v-if="it.hasUpdate"
             class="ctile-badge upd-badge"

@@ -5,6 +5,7 @@ import { MiuixButton, MiuixProgressIndicator } from "miuix-vue";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import type { BookResult, SourceRow } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
+import LoadingImage from "@/components/LoadingImage.vue";
 import { collectGroups, splitGroups } from "@/utils/sourceGroups";
 import { openDetail } from "@/utils/reader";
 
@@ -171,11 +172,10 @@ async function doSearch() {
         @click="openBook(it)"
       >
         <span class="ctile-cover">
-          <img
+          <LoadingImage
             :src="it.coverUrl ? coverProxyUrl(it.coverUrl) : FALLBACK_COVER_SVG"
-            loading="lazy"
             @error="onCoverError($event, it.coverUrl)"
-          >
+          />
         </span>
         <span class="ctile-name">{{ it.name }}</span>
         <span class="ctile-meta">{{ it.author || "佚名" }}</span>
