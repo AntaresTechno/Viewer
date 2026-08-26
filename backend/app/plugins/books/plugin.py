@@ -855,6 +855,7 @@ def create_router(ctx) -> APIRouter:
     @router.get("/shelf")
     async def my_shelf(
         sort: str = "added",
+        order: str = "desc",
         current=Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
     ):
@@ -863,6 +864,8 @@ def create_router(ctx) -> APIRouter:
         ``sort``：``added`` 加入时间（默认）｜ ``updated`` 最近更新
         （书源检测到新章的时间）｜ ``read`` 最后阅读（阅读进度时间，
         未读过的排最后）。
+        ``order``：``desc`` 倒序（默认，新的在前）｜ ``asc`` 正序
+        （旧的在前；``read`` 排序时未读过的排最前）。
         """
         user, perms = current
         allowed = (
@@ -906,6 +909,10 @@ def create_router(ctx) -> APIRouter:
                     base_stmt.order_by(ShelfItem.created_at.desc(), ShelfItem.id.desc())
                 )
             ).scalars().all()
+
+        # 正序：把默认的倒序结果整组翻转（各排序键的并列规则保持一致）
+        if order == "asc":
+            rows.reverse()
 
         prog_rows = (
             await db.execute(

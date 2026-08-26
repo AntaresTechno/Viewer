@@ -135,6 +135,9 @@ export interface ShelfEntry {
 /** 书架排序方式：加入时间 / 最近更新 / 最后阅读 */
 export type ShelfSort = "added" | "updated" | "read";
 
+/** 书架排序方向：desc 倒序（新的在前，默认）/ asc 正序（旧的在前） */
+export type ShelfOrder = "asc" | "desc";
+
 export interface ExploreKind {
   title: string;
   url: string | null;
@@ -575,8 +578,8 @@ export const api = {
     const r = await http.get(`/books/content?${params.toString()}`);
     return r.data as { content: string };
   },
-  shelf: async (sort: ShelfSort = "added") => {
-    const r = await http.get("/books/shelf", { params: { sort } });
+  shelf: async (sort: ShelfSort = "added", order: ShelfOrder = "desc") => {
+    const r = await http.get("/books/shelf", { params: { sort, order } });
     return r.data as { items: ShelfEntry[] };
   },
   shelfAdd: async (e: Omit<ShelfEntry, "id" | "progress">) => {

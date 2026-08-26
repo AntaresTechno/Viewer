@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { MiuixButton, MiuixDialog, MiuixProgressIndicator } from "miuix-vue";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
-import type { ShelfEntry, ShelfSort } from "@/api/client";
+import type { ShelfEntry, ShelfOrder, ShelfSort } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
 import LoadingImage from "@/components/LoadingImage.vue";
 import { openDetail, openReader } from "@/utils/reader";
@@ -14,19 +14,24 @@ const items = ref<ShelfEntry[]>([]);
 const loading = ref(true);
 const error = ref("");
 
-/* 书架排序：加入时间 / 最近更新 / 最后阅读（记忆上次选择） */
+/* 书架排序：加入时间 / 最近更新 / 最后阅读（记忆上次选择与方向） */
 const SORTS: { key: ShelfSort; label: string; hint: string }[] = [
-  { key: "added", label: "加入时间", hint: "最近加入书架的在前" },
-  { key: "updated", label: "最近更新", hint: "书源检测到新章的在前" },
-  { key: "read", label: "最后阅读", hint: "最近读过的在前" },
+  { key: "added", label: "加入时间", hint: "按加入书架的时间排" },
+  { key: "updated", label: "最近更新", hint: "按书源检测到新章的时间排" },
+  { key: "read", label: "最后阅读", hint: "按最后阅读时间排，没读过的垫底" },
 ];
 const storedSort = localStorage.getItem("shelf_sort") as ShelfSort | null;
 const sortKey = ref<ShelfSort>(
   storedSort && SORTS.some((s) => s.key === storedSort) ? storedSort : "added",
 );
 
-watch(sortKey, (v) => {
-  localStorage.setItem("shelf_sort", v);
+/* 排序方向：desc 倒序（新的在前，默认）/ asc 正序（旧的在前），同样记忆 */
+const storedDir = localStorage.getItem("shelf_order");
+const sortDir = ref<ShelfOrder>(storedDir === "asc" ? "asc" : "desc");
+
+watch([sortKey, sortDir], ([k, d]) => {
+  localStorage.setItem("shelf_sort", k);
+  localStorage.setItem("shelf_order", d);
   void load();
 });
 
@@ -35,7 +40,7 @@ onMounted(load);
 async function load() {
   loading.value = true;
   try {
-    items.value = (await api.shelf(sortKey.value)).items;
+    items.value = (await api.shelf(sortKey.value, sortDir.value)).items;
   } catch (e) {
     error.value = errMsg(e);
   } finally {
@@ -129,17 +134,39 @@ function subText(it: ShelfEntry): string {
       <MiuixButton @click="$router.push('/search')">去搜索添加</MiuixButton>
     </div>
 
-    <!-- 排序 -->
-    <div class="sort-row" role="tablist" aria-label="书架排序">
+    <!-- 排序：方式 + 方向（正序=旧的在前 / 倒序=新的在前） -->
+    <div class="sort-row">
+      <div class="sort-keys" role="tablist" aria-label="书架排序">
+        <button
+          v-for="s in SORTS"
+          :key="s.key"
+          type="button"
+          role="tab"
+          class="chip small sort-chip"
+          :class="{ selected: sortKey === s.key }"
+          :aria-selected="sortKey === s.key"
+          :title="s.hint"
+          @click="sortKey = s.key"
+        >{{ s.label }}</button>
+      </div>
       <button
-        v-for="s in SORTS"
-        :key="s.key"
         type="button"
-        class="chip small sort-chip"
-        :class="{ selected: sortKey === s.key }"
-        :title="s.hint"
-        @click="sortKey = s.key"
-      >{{ s.label }}</button>
+        class="chip small sort-chip dir-chip"
+        :aria-label="sortDir === 'asc'
+          ? '当前正序：旧的在前，点击切换为倒序'
+          : '当前倒序：新的在前，点击切换为正序'"
+        @click="sortDir = sortDir === 'asc' ? 'desc' : 'asc'"
+      >
+        <svg
+          class="dir-arrow"
+          :class="{ up: sortDir === 'asc' }"
+          viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>
+        </svg>{{ sortDir === "asc" ? "正序" : "倒序" }}
+      </button>
     </div>
 
     <div v-if="loading" class="center"><MiuixProgressIndicator /></div>
@@ -161,9 +188,9 @@ function subText(it: ShelfEntry): string {
     </div>
 
     <!-- 封面优先的瓷砖网格：点击即续读；详情/删除固定在卡片底部操作排。
-         :key 绑定排序键 —— 切换排序时整组重挂载，重放全局瓷砖入场
+         :key 绑定排序键 + 方向 —— 切换时整组重挂载，重放全局瓷砖入场
          错帧，避免几十个封面瞬间大挪移。 -->
-    <div class="cover-grid" v-else :key="sortKey">
+    <div class="cover-grid" v-else :key="`${sortKey}-${sortDir}`">
       <div
         v-for="it in items"
         :key="it.id"
@@ -268,12 +295,34 @@ function subText(it: ShelfEntry): string {
 .sort-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin: -6px 0 16px;
+}
+.sort-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 .sort-chip {
   padding: 5px 13px;
   font-size: 12px;
+}
+.dir-chip {
+  margin-left: auto;
+}
+.dir-arrow {
+  width: 13px;
+  height: 13px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dir-arrow {
+    transition: transform 0.35s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+  }
+}
+.dir-arrow.up {
+  transform: rotate(180deg);
 }
 .upd-badge {
   background: color-mix(in srgb, #e5484d 90%, transparent);
