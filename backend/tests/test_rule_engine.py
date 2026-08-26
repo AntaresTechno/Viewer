@@ -230,6 +230,43 @@ class TestTemplates:
         page_val = None
 
 
+class TestJsStringListElementWise:
+    """stringList 阶段内嵌 <js> 按元素求值（回归：#<js> 在字段列表后 .replace 报 not a function）。"""
+
+    def test_js_after_field_chain_on_list(self):
+        from app.legado_rule.js_bridge import detect_engine
+
+        if detect_engine() is None:
+            pytest.skip("no JS engine installed")
+        html = (
+            '<span class="book-metas">少年：玄幻</span>'
+            '<span class="book-metas">状态：连载中</span>'
+            '<span class="book-metas">字数：1234</span>'
+        )
+        rule = (
+            "tag.span@text&&tag.span@text&&tag.span@text"
+            "##(?:少年|状态|字数)：| [\\d日:]+\n"
+            "<js>result.replace(/ /,',')</js>"
+        )
+        ar = make_ar(html)
+        got = ar.get_string_list(rule) or []
+        joined = ", ".join(got)
+        # 每段字段修掉前缀后逐个经过 JS；原本逗号替换空格不再抛出 not a function
+        assert all("：" not in x for x in got)
+        assert any(x != "" for x in got)
+
+    def test_js_on_named_list(self):
+        from app.legado_rule.js_bridge import detect_engine
+
+        if detect_engine() is None:
+            pytest.skip("no JS engine installed")
+        html = '<i>甲</i><i>乙</i>'
+        rule = "tag.i@text\n<js>result + '_!'</js>"
+        ar = make_ar(html)
+        got = ar.get_string_list(rule) or []
+        assert got == ["甲_!", "乙_!"]
+
+
 class TestJsInline:
     def test_inline_js_block(self):
         from app.legado_rule.js_bridge import detect_engine
@@ -277,6 +314,31 @@ class TestAnalyzeUrl:
             'https://x.example.com,{"headers":{"Referer":"https://x.example.com/"}}'
         )
         assert au.header_map["Referer"].endswith("/")
+
+    def test_source_js_header_evaluated(self):
+        """书源 header 是 @js: 时应求值得到请求头（修复：旧实现直接丢弃）。"""
+        from app.legado_rule.js_bridge import detect_engine
+
+        if detect_engine() is None:
+            pytest.skip("no JS engine installed")
+        src = {
+            "header": "@js:\nJSON.stringify({"
+                      '"User-Agent": "Mozilla/5.0 Mobile Safari/537.36", '
+                      '"Referer": baseUrl})',
+        }
+        au = AnalyzeUrl(src["searchUrl"] if "searchUrl" in src else "https://s.example.com/search",
+                        key="k", page=1, source=src,
+                        base_url="https://s.example.com/")
+        hdr = au._source_headers()
+        assert hdr and hdr.get("User-Agent") == "Mozilla/5.0 Mobile Safari/537.36"
+        assert hdr.get("Referer") == "https://s.example.com"
+
+    def test_source_plain_json_header(self):
+        au = AnalyzeUrl(
+            "https://s.example.com/",
+            source={"header": json.dumps({"User-Agent": "UA/1.0"})},
+        )
+        assert au._source_headers() == {"User-Agent": "UA/1.0"}
 
     def test_absolute_url_join(self):
         from app.legado_rule.analyze_url import get_absolute_url

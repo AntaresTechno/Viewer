@@ -417,7 +417,20 @@ class AnalyzeRule:
                 if result is None:
                     continue
                 rule = sr.rule
-                if rule:
+                if rule and sr.mode == MODE_JS and isinstance(result, list):
+                    # 列表阶段遇到 <js>/@js: 时，按元素逐个求值（compat 修复）：
+                    # legado 的 stringList 里「&& 字段链 + 尾部 js」很常见，作者预期
+                    # result 绑定到每个字段字符串而非整个数组。否则 result.replace 等
+                    # 会在 JS 数组上抛 "not a function"。
+                    mapped: list[Any] = []
+                    for it in result:
+                        ev = self.eval_js(rule, it if isinstance(it, str) else _to_str(it))
+                        if isinstance(ev, list):
+                            mapped.extend(ev)
+                        elif ev is not None:
+                            mapped.append(ev)
+                    result = mapped
+                elif rule:
                     result = self._dispatch(sr, rule, result, is_url=is_url,
                                             want="list")
                 if sr.replace_regex and isinstance(result, list):

@@ -294,8 +294,32 @@ class AnalyzeUrl:
         raw = self.source.get("header") if isinstance(self.source, dict) else None
         if not raw:
             return None
+        rule_text = str(raw)
+        # ligand 书源 header 常写成 @js: / <js> 动态生成（如按浏览器拼 UA）。
+        # 旧实现只认纯 JSON，遇到 @js: 直接丢弃，导致请求用默认 UA 被站点拒/限。
+        low = rule_text.strip().lower()
+        if low.startswith("@js:") or low.startswith("<js>"):
+            try:
+                m = JS_PATTERN.search(rule_text)
+                if not m:
+                    return None
+                code = m.group(2) or m.group(1)
+                val = eval_js(code, {
+                    "source": self.source or None,
+                    "baseUrl": self.base_url,
+                    "result": None,
+                    "page": self.page,
+                    "key": self.key,
+                })
+                if isinstance(val, str):
+                    val = json.loads(val)
+                if isinstance(val, dict):
+                    return {str(k): str(v) for k, v in val.items()}
+            except Exception:  # noqa: BLE001 - 头失败不应让请求整体崩掉
+                return None
+            return None
         try:
-            obj = json.loads(raw) if isinstance(raw, str) else raw
+            obj = json.loads(rule_text) if isinstance(rule_text, str) else rule_text
             if isinstance(obj, dict):
                 return {str(k): str(v) for k, v in obj.items()}
         except Exception:  # noqa: BLE001
