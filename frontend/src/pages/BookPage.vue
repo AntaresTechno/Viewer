@@ -4,7 +4,6 @@ import { useRoute, useRouter } from "vue-router";
 import {
   MiuixButton,
   MiuixCard,
-  MiuixProgressIndicator,
   MiuixText,
 } from "miuix-vue";
 import {
@@ -372,7 +371,30 @@ async function downloadToLibrary() {
       返回
     </button>
 
-    <div v-if="loadingInfo" class="center"><MiuixProgressIndicator /></div>
+    <!-- 详情加载中：骨架屏（封面 + 标题 + 章节面板占位，微光扫过），
+         不再是悬空的小转圜 —— 版面先成形，读起来更像“还在载入”而非“空白”。 -->
+    <div v-if="loadingInfo" class="skel" aria-hidden="true">
+      <div class="skel-hero">
+        <div class="skel-top">
+          <div class="skel-cover"></div>
+          <div class="skel-side">
+            <div class="skel-line skel-tit"></div>
+            <div class="skel-line skel-by"></div>
+            <div class="skel-line skel-chips"></div>
+          </div>
+        </div>
+        <div class="skel-intro">
+          <div class="skel-line"></div>
+          <div class="skel-line skel-third"></div>
+        </div>
+      </div>
+      <div class="skel-panel">
+        <div class="skel-line skel-head"></div>
+        <div class="skel-row"></div>
+        <div class="skel-row"></div>
+        <div class="skel-row skel-short"></div>
+      </div>
+    </div>
 
     <!-- 详情加载失败：可见错误态 + 重试（书源下线/网络不通时不再白屏） -->
     <MiuixCard v-else-if="loadError" class="error-panel" :show-indication="false">
@@ -387,7 +409,7 @@ async function downloadToLibrary() {
       </div>
     </MiuixCard>
 
-    <template v-else-if="info">
+    <div v-else-if="info" class="detail-wrap">
       <!-- 统一详情头部：与阅读器内「书籍信息」弹层共用同一组件 -->
       <BookDetailHero
         class="page-hero"
@@ -437,7 +459,11 @@ async function downloadToLibrary() {
             @click="refreshToc"
           >刷新目录</MiuixButton>
         </div>
-        <div v-if="loadingToc" class="center"><MiuixProgressIndicator /></div>
+        <div v-if="loadingToc" class="skel-rows" aria-hidden="true">
+          <div class="skel-row"></div>
+          <div class="skel-row"></div>
+          <div class="skel-row skel-short"></div>
+        </div>
         <ol v-else class="toc-list">
           <li v-for="(c, i) in chapters" :key="c.url + i">
             <a @click.prevent="readFrom(i)">
@@ -471,7 +497,7 @@ async function downloadToLibrary() {
         </dl>
         <pre class="rules-json">{{ sourceInfo ? stringify(sourceInfo.rules) : "加载中…" }}</pre>
       </details>
-    </template>
+    </div>
   </div>
 </template>
 
@@ -517,6 +543,137 @@ async function downloadToLibrary() {
   display: grid;
   place-items: center;
   padding: 40px 0;
+}
+
+/* ---- 详情加载骨架屏 ----
+ * 版面与真实内容大致同形：封面 + 标题区 + 简介 + 章节面板。
+ * 微光扫过只动 transform（合成器动画），主线程忙也不卡；
+ * 减弱动态偏好下退为静态色块（略去扫光，仍不阻碍理解）。 */
+.skel {
+  display: grid;
+  gap: 16px;
+}
+.skel-hero,
+.skel-panel {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--app-radius-card, 20px);
+  background: var(--m-color-surface-container);
+}
+.skel-hero {
+  padding: 26px 30px 22px;
+}
+.skel-panel {
+  padding: 18px;
+}
+.skel-top {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+}
+.skel-cover {
+  width: 118px;
+  aspect-ratio: 27 / 38;
+  border-radius: 12px;
+  background: var(--m-color-surface-container-high);
+  flex: none;
+}
+.skel-side {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.skel-intro {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+.skel-line,
+.skel-row {
+  height: 13px;
+  border-radius: 6px;
+  background: var(--m-color-surface-container-high);
+}
+.skel-tit {
+  height: 28px;
+  width: 72%;
+}
+.skel-by {
+  width: 40%;
+}
+.skel-chips {
+  height: 22px;
+  width: 55%;
+  border-radius: 999px;
+}
+.skel-third {
+  width: 55%;
+}
+.skel-head {
+  height: 16px;
+  width: 34%;
+  margin-bottom: 16px;
+}
+.skel-row {
+  height: 12px;
+  margin-bottom: 12px;
+}
+@media (max-width: 720px) {
+  .skel-top {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  .skel-side,
+  .skel-intro {
+    max-width: 88%;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .skel-hero::after,
+  .skel-panel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      100deg,
+      transparent 25%,
+      color-mix(in srgb, var(--m-color-on-surface) 8%, transparent) 50%,
+      transparent 75%
+    );
+    animation: skel-sweep 1.4s linear infinite;
+  }
+}
+@keyframes skel-sweep {
+  to { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel-hero::after,
+  .skel-panel::after {
+    display: none;
+  }
+}
+
+/* 详情正文入场：骨架屏 → 内容轻浮入（不再硬切换） */
+.detail-wrap {
+  animation: det-in 0.4s var(--app-ease-calm, cubic-bezier(0.22, 0.61, 0.36, 1)) both;
+}
+@keyframes det-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .detail-wrap {
+    animation: none;
+  }
 }
 .panel {
   margin-top: 16px;

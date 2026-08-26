@@ -30,6 +30,13 @@ const fetched = ref<{ intro?: string; kind?: string; lastChapter?: string }>({})
 const displayIntro = computed(() => fetched.value.intro || props.intro || "");
 const displayKind = computed(() => props.kind || fetched.value.kind || "");
 const displayLast = computed(() => props.lastChapter || fetched.value.lastChapter || "");
+
+/* ---- 背景虚化铺底淡入：缓存命中的 load 可能早于挂载，需同步探测 ---- */
+const bgRef = ref<HTMLImageElement | null>(null);
+const bgLoaded = ref(false);
+function syncBgLoaded(): void {
+  if (bgRef.value?.complete && bgRef.value.naturalWidth > 0) bgLoaded.value = true;
+}
 const kindChips = computed(() =>
   displayKind.value.split(/[,,、]/).map((s) => s.trim()).filter(Boolean).slice(0, 4),
 );
@@ -84,6 +91,7 @@ function measureClamp() {
 watch([displayIntro, introExpanded], () => void nextTick(measureClamp));
 onMounted(() => {
   measureClamp();
+  syncBgLoaded();
   window.addEventListener("resize", measureClamp);
 });
 onBeforeUnmount(() => window.removeEventListener("resize", measureClamp));
@@ -93,10 +101,13 @@ onBeforeUnmount(() => window.removeEventListener("resize", measureClamp));
   <section class="bd-hero">
     <img
       v-if="coverUrl"
+      ref="bgRef"
       class="bd-bg"
+      :class="{ 'is-loaded': bgLoaded }"
       :src="coverProxyUrl(coverUrl)"
       alt=""
       aria-hidden="true"
+      @load="bgLoaded = true"
       @error="onCoverError($event, coverUrl)"
     >
     <div class="bd-scrim" aria-hidden="true"></div>
@@ -164,6 +175,10 @@ onBeforeUnmount(() => window.removeEventListener("resize", measureClamp));
   height: calc(100% + 140px);
   object-fit: cover;
   filter: blur(58px) saturate(150%);
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.bd-bg.is-loaded {
   opacity: 0.42;
 }
 .bd-scrim {

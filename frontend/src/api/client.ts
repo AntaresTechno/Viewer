@@ -177,6 +177,8 @@ export interface PrefetchItem {
   title?: string;
   base?: string;
   isVolume?: boolean;
+  /** 指针章：仅作为上一条的 next_chapter_url 缓存键来源，后端不为其拉取。 */
+  pointer?: boolean;
 }
 
 /* ------------------------------------------------------ purify (正文净化) */
@@ -296,6 +298,23 @@ export interface WebDavBackupItem {
   isDir: boolean;
 }
 
+/* ------------------------------------------- webdav 服务端（legado 进度同步） */
+export interface WebDavServerInfo {
+  enabled: boolean;
+  hasSecret: boolean;
+  url: string;
+  account: string;
+  lastSyncAt: string | null;
+}
+
+export interface WebDavPendingItem {
+  file: string;
+  name: string;
+  author: string;
+  chapterIndex: number;
+  updatedAt: string | null;
+}
+
 const http = axios.create({ baseURL: "/api", timeout: 60_000 });
 http.interceptors.request.use((cfg) => {
   const token = localStorage.getItem("viewer_token");
@@ -327,6 +346,11 @@ export function errMsg(e: unknown): string {
 
 /* ------------------------------------------------------------------ auth */
 export const api = {
+  /** 后端连通性自检（公开、无鉴权、轻量）：读不到即视为离线。 */
+  health: async () => {
+    const r = await http.get("/health");
+    return r.data as { status: string; app?: string };
+  },
   login: async (username: string, password: string) => {
     const r = await http.post<{ token: string; user: UserPublic }>(
       "/auth/login",
@@ -889,6 +913,31 @@ export const api = {
   },
   webdavDeleteBackup: async (name: string) => {
     await http.delete(`/webdav/backups/${encodeURIComponent(name)}`);
+  },
+
+  /* ------------------------------------------- webdav 服务端（legado 同步） */
+  webdavGetServer: async () => {
+    const r = await http.get<WebDavServerInfo>("/webdav/server");
+    return r.data;
+  },
+  webdavSaveServer: async (enabled: boolean) => {
+    const r = await http.put<{ ok: boolean; enabled: boolean }>(
+      "/webdav/server",
+      { enabled },
+    );
+    return r.data;
+  },
+  webdavResetServerSecret: async () => {
+    const r = await http.post<{ ok: boolean; secret: string }>(
+      "/webdav/server/secret",
+    );
+    return r.data.secret;
+  },
+  webdavServerPending: async () => {
+    const r = await http.get<{ items: WebDavPendingItem[]; total: number }>(
+      "/webdav/server/pending",
+    );
+    return r.data;
   },
 };
 

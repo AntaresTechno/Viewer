@@ -32,15 +32,19 @@ const sortDir = ref<ShelfOrder>(storedDir === "asc" ? "asc" : "desc");
 watch([sortKey, sortDir], ([k, d]) => {
   localStorage.setItem("shelf_sort", k);
   localStorage.setItem("shelf_order", d);
+  // 切换排序只静默刷新，不再翻 loading —— 网格保持挂载，由模板里的
+  // TransitionGroup 对被复用节点做 FLIP 平滑位移，不闪加载条、不重播入场。
   void load();
 });
 
 onMounted(load);
 
 async function load() {
-  loading.value = true;
+  // loading 只在首屏展示（const loading = ref(true)）；排序/删除/刷新目录
+  // 复用这条路径，但不再翻转 loading。
   try {
     items.value = (await api.shelf(sortKey.value, sortDir.value)).items;
+    error.value = "";
   } catch (e) {
     error.value = errMsg(e);
   } finally {
@@ -188,9 +192,14 @@ function subText(it: ShelfEntry): string {
     </div>
 
     <!-- 封面优先的瓷砖网格：点击即续读；详情/删除固定在卡片底部操作排。
-         :key 绑定排序键 + 方向 —— 切换时整组重挂载，重放全局瓷砖入场
-         错帧，避免几十个封面瞬间大挪移。 -->
-    <div class="cover-grid" v-else :key="`${sortKey}-${sortDir}`">
+         排序/换方向时网格不重挂载 —— 用 TransitionGroup 对被复用的节点做
+         FLIP 平滑位移（见 .shelf-flip-move），不再闪加载条、也不重放入场错帧。 -->
+    <TransitionGroup
+      v-else
+      name="shelf-flip"
+      tag="div"
+      class="cover-grid"
+    >
       <div
         v-for="it in items"
         :key="it.id"
@@ -255,7 +264,7 @@ function subText(it: ShelfEntry): string {
           >删除</button>
         </span>
       </div>
-    </div>
+    </TransitionGroup>
 
     <!-- 删除确认：界面内主题化对话框（替代浏览器 confirm） -->
     <MiuixDialog
@@ -327,6 +336,14 @@ function subText(it: ShelfEntry): string {
 .upd-badge {
   background: color-mix(in srgb, #e5484d 90%, transparent);
   color: #fff;
+}
+
+/* 排序/换方向时被复用的封面做 FLIP 平滑位移（TransitionGroup 的 -move 类）。
+ * 只动 transform，合成器友好；减弱动态偏好下退为瞬移。 */
+@media (prefers-reduced-motion: no-preference) {
+  .shelf-flip-move {
+    transition: transform 0.5s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+  }
 }
 
 /* ---- 卡片尺寸统一（与首页同构：一行标题 → 进度 → 作者） ----

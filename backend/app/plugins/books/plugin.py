@@ -591,10 +591,14 @@ def create_router(ctx) -> APIRouter:
         title: str = ""
         base: str = ""
         isVolume: bool = False
+        # 指针章：只为上一条提供 next_chapter_url，本身不作为预取目标。
+        # 若把它当下一条去拉，其缓存键里 next="" 与真实阅读（next=下下章）
+        # 永远对不上，会白耗一次回源和一个并发槽。
+        pointer: bool = False
 
     class PrefetchBody(BaseModel):
         source_url: str
-        # 前端每次带「N 章 + 1 条下一章指针」，N 最大 20 → 上限 21
+        # 前端每次带「N 章 + 1 条指针」，N 最大 20 → 上限 21
         items: list[PrefetchItem] = Field(max_length=21)
 
     @router.post("/content/prefetch")
@@ -612,6 +616,9 @@ def create_router(ctx) -> APIRouter:
             nxt = body.items[i + 1].url if i + 1 < len(body.items) else ""
             # 键必须与 GET /content 完全一致（含 next_chapter_url），
             # 否则真实阅读时算出的键对不上，预取的缓存永远命中不了。
+            # 指针章不拉取：它的 next="" 键永远不会被真实阅读命中。
+            if it.pointer:
+                continue
             key = content_cache.cache_key(
                 body.source_url, it.url, base=it.base, title=it.title,
                 next_chapter_url=nxt, is_volume=it.isVolume,

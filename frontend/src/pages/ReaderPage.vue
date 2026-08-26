@@ -20,7 +20,7 @@ const author = ref((route.query.author as string) ?? "");
 const startIndex = route.query.index != null ? Number(route.query.index) : null;
 
 /** 打开章节后自动预取的后续章节数（设置里可调，0 为关闭；上限 20） */
-const PREFETCH_DEFAULT = 5;
+const PREFETCH_DEFAULT = 2;
 const PREFETCH_MIN = 0;
 const PREFETCH_MAX = 20;
 const prefetchCount = ref(clampPrefetch(Number(localStorage.getItem("reader_prefetch"))));
@@ -296,16 +296,22 @@ async function openChapter(idx: number, restoreOffset = 0) {
 }
 
 /**
- * 预取当前章之后的 N 章（后端缓存，N 可在设置里调，默认 5），失败静默。
- * 列表多带 1 章作为「下一章」指针：正文接口的缓存键包含下一章地址，
- * 不带指针的话最后一条预取的键与真实读取不一致，缓存永远命中不了。
+ * 预取当前章之后的 N 章（后端缓存，N 可在设置里调，默认 2），失败静默。
+ * 列表带 N+1 章，最后一条标记为「指针章」：
+ * 正文接口的缓存键包含下一章地址，需要这条指针给第 N 章提供正确的 next，
+ * 否则第 N 章的预取键与真实读取不一致。指针章本身不拉取（键永远对不上）。
  */
 function prefetchUpcoming(idx: number) {
   const n = prefetchCount.value;
   if (n <= 0) return;
-  const upcoming = chapters.value
-    .slice(idx + 1, idx + 1 + n + 1)
-    .map((c) => ({ url: c.url, title: c.title ?? "", base: c.baseUrl, isVolume: c.isVolume }));
+  const picked = chapters.value.slice(idx + 1, idx + 1 + n + 1);
+  const upcoming = picked.map((c, i) => ({
+    url: c.url,
+    title: c.title ?? "",
+    base: c.baseUrl,
+    isVolume: c.isVolume,
+    pointer: i === picked.length - 1,
+  }));
   if (upcoming.length) {
     void api.prefetchContent(origin, upcoming).catch(() => {});
   }

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { MiuixIconButton, useTheme as useMiuixTheme } from "miuix-vue";
 import { useAuth } from "@/stores/auth";
 import { useThemeStore } from "@/stores/theme";
+import { api } from "@/api/client";
 import AppearancePanel from "@/components/AppearancePanel.vue";
 
 /**
@@ -181,11 +182,16 @@ onMounted(() => {
     ro = new ResizeObserver(scheduleThumbMeasure);
     ro.observe(navEl.value);
   }
+  void checkConn(true);
+  connTimer = window.setInterval(() => void checkConn(), 30_000);
+  document.addEventListener("visibilitychange", onConnVisibility);
 });
 onBeforeUnmount(() => {
   cancelAnimationFrame(measureRaf);
   window.removeEventListener("resize", scheduleThumbMeasure);
   ro?.disconnect();
+  if (connTimer !== null) window.clearInterval(connTimer);
+  document.removeEventListener("visibilitychange", onConnVisibility);
 });
 
 const thumbStyle = computed(() => ({
@@ -229,6 +235,29 @@ function confirmLogout() {
   if (!confirm("确定退出登录？")) return;
   auth.logout();
   router.push("/login");
+}
+
+/* ---- 后端连通性（操作按钮排右侧的在线状态点） ----
+ * 挂载时检测一次，之后每 30s 静默复查 + 页面回到前台时复查，避免漏判断网恢复；
+ * 手动点击带「检测中」脉冲。 */
+const conn = ref<"checking" | "online" | "offline">("checking");
+let connTimer: number | null = null;
+const connTitle = computed(() =>
+  conn.value === "online" ? "后端已连接 · 点击重新检测"
+  : conn.value === "offline" ? "后端已断开 · 点击重试"
+  : "正在检测后端连通性…",
+);
+async function checkConn(showChecking = false) {
+  if (showChecking) conn.value = "checking";
+  try {
+    await api.health();
+    conn.value = "online";
+  } catch {
+    conn.value = "offline";
+  }
+}
+function onConnVisibility() {
+  if (document.visibilityState === "visible") void checkConn();
 }
 </script>
 
@@ -317,6 +346,18 @@ function confirmLogout() {
               />
             </svg>
           </MiuixIconButton>
+
+          <!-- 后端连通性状态：占住这一排右侧，按钮保持左对齐 -->
+          <button
+            type="button"
+            class="conn"
+            :class="conn"
+            :title="connTitle"
+            @click="checkConn(true)"
+          >
+            <span class="conn-dot"></span>
+            <span class="conn-label">{{ conn === "online" ? "在线" : conn === "offline" ? "离线" : "检测中" }}</span>
+          </button>
         </div>
 
         <!-- 最底部：整行宽度尽量完整展示头像与用户名 -->
@@ -559,7 +600,7 @@ function confirmLogout() {
 .uacts {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 2px;
 }
 .aic {
@@ -567,6 +608,47 @@ function confirmLogout() {
   height: 19px;
   fill: currentColor;
   display: block;
+}
+
+/* 后端连通性状态：一排在右（margin-left:auto），按钮保持左对齐 */
+.conn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--m-color-on-surface-secondary);
+  padding: 4px 6px;
+  border-radius: 999px;
+}
+.conn:hover {
+  background: color-mix(in srgb, var(--m-color-on-surface) 5%, transparent);
+}
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--m-color-outline);
+  flex: none;
+}
+.conn.online .conn-dot {
+  background: var(--m-color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--m-color-primary) 18%, transparent);
+}
+.conn.offline .conn-dot {
+  background: var(--m-color-error);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .conn.checking .conn-dot {
+    animation: conn-pulse 1.1s ease-in-out infinite;
+  }
+}
+@keyframes conn-pulse {
+  50% { opacity: 0.35; }
 }
 
 /* 外观弹层：从按钮向右侧内容区飞出（flyout）。
