@@ -132,6 +132,11 @@ cd viewer/backend
 .\tests\e2e_smoke.ps1                    # 需先启动 backend(8000) 与夹具站(8901)
 ```
 
+## 许可证
+
+本项目以 **GNU General Public License v3（GPLv3）** 授权发布，全文见 [LICENSE](LICENSE)。
+使用、修改、再分发本项目需遵守该许可证条款。
+
 ## 已知限制
 
 - 会话撤销：JWT 无服务端黑名单，禁用/删号后旧 token 至自然过期前仍可用。
