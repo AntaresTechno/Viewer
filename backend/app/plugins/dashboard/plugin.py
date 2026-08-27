@@ -1,10 +1,14 @@
 """dashboard 插件 — 管理端仪表盘统计。"""
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
 
 meta = {
     "name": "dashboard",
@@ -17,7 +21,7 @@ meta = {
 }
 
 
-def create_router(ctx) -> APIRouter:
+def create_router(ctx: "PluginContext") -> APIRouter:
     from ...core.deps import require_perm
     from ...core.db import get_db
     from ...models import BookSourceRow, PluginState, Role, ShelfItem, User

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +19,9 @@ from ...services.toc_queue import (
     latest_job_map,
     toc_queue,
 )
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
 
 # 预下载到本地库的进行中作业（进程内内存态，仅用于进度展示）
 _DL_JOBS: dict[str, dict] = {}
@@ -51,7 +55,7 @@ _TOC_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _TOC_TTL = 1800
 
 
-def create_router(ctx) -> APIRouter:
+def create_router(ctx: "PluginContext") -> APIRouter:
     from ...core.config import settings
     from ...core.deps import get_current_user, require_perm
     from ...core.db import get_db, get_session_factory

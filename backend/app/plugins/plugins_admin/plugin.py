@@ -4,9 +4,13 @@ import io
 import re
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
 
 meta = {
     "name": "plugins",
@@ -104,7 +108,7 @@ def _plan_install(
     return stripped, dirname, 1
 
 
-def create_router(ctx) -> APIRouter:
+def create_router(ctx: "PluginContext") -> APIRouter:
     from sqlalchemy import select
 
     from ...core.deps import require_superuser

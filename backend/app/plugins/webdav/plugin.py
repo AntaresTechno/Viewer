@@ -24,11 +24,15 @@ import re
 import secrets
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
 
 meta = {
     "name": "webdav",
@@ -295,14 +299,14 @@ async def run_auto_backup_if_enabled(user_id: int) -> bool:
     return True
 
 
-def create_root_router(ctx):
+def create_root_router(ctx: "PluginContext") -> APIRouter:
     """站点根路径专用路由工厂：legado 进度同步服务端（挂载于 /dav）。"""
     from .dav_server import create_root_router as _create
 
     return _create(ctx)
 
 
-def create_router(ctx) -> APIRouter:
+def create_router(ctx: "PluginContext") -> APIRouter:
     from sqlalchemy import select
 
     from ...core.deps import get_current_user, require_perm

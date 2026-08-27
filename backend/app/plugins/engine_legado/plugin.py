@@ -7,6 +7,11 @@
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
+
 meta = {
     "name": "engine_legado",
     "title": "Legado 书源引擎",
@@ -74,5 +79,5 @@ class LegadoEngine:
         )
 
 
-def create_engine(ctx):
+def create_engine(ctx: PluginContext) -> LegadoEngine:
     return LegadoEngine(ctx)

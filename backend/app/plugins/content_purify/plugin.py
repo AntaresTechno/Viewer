@@ -12,18 +12,22 @@
 本插件的 ``GET /content`` 也提供独立的等价入口。
 """
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
 
 meta = {
     "name": "content_purify",
     "mount": "purify",
     "title": "正文净化",
     "version": "1.1.0",
-    "description": "章节正文净化：MD3 内置净化层 + 规则包（乌云净化/自定义导入）"
-                   "+ 数据库缓存，获取内容后先净化再入库供阅读调用",
+    "description": "章节正文净化：MD3 内置净化层 + 规则包（乌云净化/自定义导入）+ 数据库缓存，获取内容后先净化再入库供阅读调用",
     "order": 36,
     "permissions": [
         ("purify.read", "查看净化规则包与缓存"),
@@ -34,7 +38,7 @@ meta = {
 }
 
 
-def create_router(ctx) -> APIRouter:
+def create_router(ctx: "PluginContext") -> APIRouter:
     from ...core.deps import require_perm
     from ...core.db import get_db
     from ...legado_rule.exceptions import FetchError

@@ -1,9 +1,14 @@
 """roles 插件 — 权限组（角色）管理与权限目录查询。"""
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
 
 meta = {
     "name": "roles",
@@ -20,7 +25,7 @@ meta = {
 }
 
 
-def create_router(ctx) -> APIRouter:
+def create_router(ctx: "PluginContext") -> APIRouter:
     from ...core.deps import require_perm
     from ...core.db import get_db
     from ...models import Role, User

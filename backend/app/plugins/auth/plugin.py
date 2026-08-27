@@ -1,11 +1,15 @@
 """auth 插件 — 登录 / 注册 / 个人资料。"""
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
 
 meta = {
     "name": "auth",
@@ -22,7 +26,7 @@ meta = {
 }
 
 
-def create_router(ctx) -> APIRouter:
+def create_router(ctx: "PluginContext") -> APIRouter:
     from ...core.deps import get_current_user
     from ...core.db import get_db
     from ...core.security import create_access_token, hash_password, verify_password

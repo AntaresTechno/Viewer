@@ -9,11 +9,15 @@
 """
 
 from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from ...plugins.registry import PluginContext
 
 meta = {
     "name": "home",
@@ -33,7 +37,7 @@ def _iso(dt) -> str | None:
     return dt.isoformat() if dt else None
 
 
-def create_router(ctx) -> APIRouter:
+def create_router(ctx: "PluginContext") -> APIRouter:
     from ...core.deps import require_perm
     from ...core.db import get_db
     from ...models import BookRef, ReadingStat, ReadProgress, ShelfItem

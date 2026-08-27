@@ -25,6 +25,7 @@ viewer/
 |---|---|
 | [部署指南](docs/deployment.md) | 长期对外部署：systemd 常驻、反向代理/HTTPS、安全加固、备份与升级 |
 | [环境安装指南](docs/installation-guide.md) | 本机安装 / 二次开发：一键脚本、手动安装、`.env` 配置、FAQ |
+| [插件规范](docs/plugin-spec.md) | 插件结构 / `meta` / 工厂合约 / 编码约定 / 新增插件模板 |
 | [架构总览](docs/architecture.md) | 插件架构与模块关系 |
 | [规则语义规格](docs/spec/*.md) | Legado 规则引擎三份语义规格（由本仓库 `legado-with-MD3-main` 源码整理） |
 
