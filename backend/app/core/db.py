@@ -114,6 +114,10 @@ async def _migrate_sqlite(conn) -> None:
         "dav_enabled": "BOOLEAN NOT NULL DEFAULT 0",
         "dav_secret_hash": "TEXT NOT NULL DEFAULT ''",
         "last_sync_at": "DATETIME",
+        # legado 备份同步（复用同一远端服务器、legado 目录）
+        "legado_enabled": "BOOLEAN NOT NULL DEFAULT 0",
+        "legado_directory": "VARCHAR(256) NOT NULL DEFAULT 'legado'",
+        "legado_last_sync_at": "DATETIME",
     }
     for col, ddl in additive.items():
         if col not in cols:

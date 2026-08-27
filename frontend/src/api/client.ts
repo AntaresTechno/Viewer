@@ -288,6 +288,9 @@ export interface WebDavConfigInfo {
   autoBackup: boolean;
   lastBackupAt: string | null;
   lastBackupFile: string;
+  legadoEnabled: boolean;
+  legadoDirectory: string;
+  legadoLastSyncAt: string | null;
 }
 
 export interface WebDavBackupItem {
@@ -313,6 +316,24 @@ export interface WebDavPendingItem {
   author: string;
   chapterIndex: number;
   updatedAt: string | null;
+}
+
+export interface WebDavLegadoResult {
+  ok: boolean;
+  direction: "both" | "pull" | "push";
+  legadoLastSyncAt: string | null;
+  pulled: number;
+  pushed: number;
+  progressUpdated: number;
+  pendingMatch: number;
+}
+
+export interface WebDavLegadoImportResult {
+  ok: boolean;
+  addedShelf: number;
+  updatedShelf: number;
+  progressUpdated: number;
+  backup: string;
 }
 
 const http = axios.create({ baseURL: "/api", timeout: 60_000 });
@@ -937,6 +958,29 @@ export const api = {
     const r = await http.get<{ items: WebDavPendingItem[]; total: number }>(
       "/webdav/server/pending",
     );
+    return r.data;
+  },
+
+  /* ------------------------------------------- legado 备份同步（外部服务器） */
+  webdavLegadoGet: async () => {
+    const r = await http.get<WebDavConfigInfo>("/webdav/legado");
+    return r.data;
+  },
+  webdavLegadoSave: async (body: { enabled: boolean; directory: string }) => {
+    const r = await http.put<{ ok: boolean } & WebDavConfigInfo>(
+      "/webdav/legado",
+      body,
+    );
+    return r.data;
+  },
+  webdavLegadoSync: async (direction: "both" | "pull" | "push") => {
+    const r = await http.post<WebDavLegadoResult>("/webdav/legado/sync", {
+      direction,
+    });
+    return r.data;
+  },
+  webdavLegadoImport: async () => {
+    const r = await http.post<WebDavLegadoImportResult>("/webdav/legado/import");
     return r.data;
   },
 };

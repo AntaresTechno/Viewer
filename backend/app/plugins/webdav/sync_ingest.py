@@ -74,7 +74,7 @@ def spawn_ingest(
             finally:
                 _ingest_locks.pop(f"{user_id}:{name}:{author}", None)
 
-    task = asyncio.get_running_loop().create_task(runner)
+    task = asyncio.get_running_loop().create_task(runner())
     _INGEST_TASKS.add(task)
     task.add_done_callback(_INGEST_TASKS.discard)
 

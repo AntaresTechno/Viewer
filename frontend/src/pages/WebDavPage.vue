@@ -38,6 +38,79 @@ const secretOnce = ref(""); // 生成的访问密码，仅展示一次
 const copied = ref("");
 const pending = ref<WebDavPendingItem[]>([]);
 
+/* ---- legado 备份同步（外部 WebDAV 服务器）---- */
+const legadoEnabled = ref(false);
+const legadoDir = ref("legado");
+const legadoLastSyncAt = ref<string | null>(null);
+const legadoSaving = ref(false);
+const legadoSyncing = ref("");
+const legadoImporting = ref(false);
+
+async function saveLegado() {
+  err.value = "";
+  msg.value = "";
+  legadoSaving.value = true;
+  try {
+    const r = await api.webdavLegadoSave({
+      enabled: legadoEnabled.value,
+      directory: legadoDir.value.trim() || "legado",
+    });
+    info.value = r;
+    legadoDir.value = r.legadoDirectory;
+    legadoLastSyncAt.value = r.legadoLastSyncAt;
+    msg.value = legadoEnabled.value
+      ? "legado 同步已开启，请先在阅读(legado)里把 WebDAV 目录填写为同一目录"
+      : "legado 同步已关闭";
+  } catch (e) {
+    err.value = errMsg(e);
+  } finally {
+    legadoSaving.value = false;
+  }
+}
+
+async function legadoSync(direction: "both" | "pull" | "push", label: string) {
+  if (!legadoEnabled.value) {
+    err.value = "请先点击开关开启 legado 同步";
+    return;
+  }
+  err.value = "";
+  msg.value = "";
+  legadoSyncing.value = label;
+  try {
+    const r = await api.webdavLegadoSync(direction);
+    legadoLastSyncAt.value = r.legadoLastSyncAt;
+    msg.value =
+      `legado 同步完成：拉取 ${r.pulled} · 推送 ${r.pushed} · ` +
+      `合并进度 ${r.progressUpdated} · 待匹配 ${r.pendingMatch}`;
+  } catch (e) {
+    err.value = errMsg(e);
+  } finally {
+    legadoSyncing.value = "";
+  }
+}
+
+async function legadoImport() {
+  if (!legadoEnabled.value) {
+    err.value = "请先点击开关开启 legado 同步";
+    return;
+  }
+  if (!confirm("从最新一份 legado 全量备份(backup*.zip)导入书架与进度？" +
+    "已存在的书按书名+作者合并进度，不会删除本地条目。")) return;
+  err.value = "";
+  msg.value = "";
+  legadoImporting.value = true;
+  try {
+    const r = await api.webdavLegadoImport();
+    msg.value =
+      `导入 legado 书架完成（${r.backup}）：新增书架 ${r.addedShelf} · ` +
+      `更新 ${r.updatedShelf} · 进度 ${r.progressUpdated}`;
+  } catch (e) {
+    err.value = errMsg(e);
+  } finally {
+    legadoImporting.value = false;
+  }
+}
+
 async function loadPending() {
   try {
     pending.value = (await api.webdavServerPending()).items;
@@ -125,6 +198,9 @@ async function load() {
     username.value = c.username;
     directory.value = c.directory || "AntaresViewer";
     autoBackup.value = c.autoBackup;
+    legadoEnabled.value = c.legadoEnabled;
+    legadoDir.value = c.legadoDirectory || "legado";
+    legadoLastSyncAt.value = c.legadoLastSyncAt;
     password.value = "";
     void listBackups();
   } catch (e) {
@@ -353,6 +429,65 @@ function fmtModified(s: string): string {
           若部署在反向代理之后，请按实际访问地址手工填写。
         </p>
       </template>
+    </MiuixCard>
+
+    <!-- legado 备份同步（外部 WebDAV 服务器） -->
+    <MiuixCard class="card" :show-indication="false">
+      <div class="srv-head">
+        <h3>legado 备份同步 · 与阅读(legado)互同步进度</h3>
+        <MiuixSwitch
+          :model-value="legadoEnabled"
+          :disabled="legadoSaving"
+          @update:model-value="(v: boolean) => { legadoEnabled = v; void saveLegado(); }"
+        />
+      </div>
+
+      <p class="hint">
+        复用上方「服务器」里已保存的地址 / 账号 / 密码，另填一个 legado 使用的
+        远端目录即可。请在阅读(legado) App 的 WebDAV 设置里把「目录」填为同一值，
+        并开启「阅读进度同步 / WebDAV 备份」，两端就会通过同一个 bookProgress/
+        目录双向同步阅读进度。
+      </p>
+
+      <div class="col" style="margin-top: 12px">
+        <label>legado 远端目录（与阅读 App 中的 WebDAV 目录一致）
+          <MiuixInput v-model="legadoDir" single-line placeholder="legado" />
+        </label>
+      </div>
+
+      <div class="row-actions" style="margin-top: 14px">
+        <MiuixButton
+          type="primary"
+          :disabled="legadoSyncing !== '' || legadoSaving"
+          @click="saveLegado"
+        >{{ legadoSaving ? "保存中…" : "保存配置" }}</MiuixButton>
+        <MiuixButton
+          :disabled="legadoSyncing !== ''"
+          @click="legadoSync('both', 'both')"
+        >{{ legadoSyncing === 'both' ? "同步中…" : "立即双向同步" }}</MiuixButton>
+        <MiuixButton
+          :disabled="legadoSyncing !== ''"
+          @click="legadoSync('push', 'push')"
+        >{{ legadoSyncing === 'push' ? "推送中…" : "仅推送" }}</MiuixButton>
+        <MiuixButton
+          :disabled="legadoSyncing !== ''"
+          @click="legadoSync('pull', 'pull')"
+        >{{ legadoSyncing === 'pull' ? "拉取中…" : "仅拉取" }}</MiuixButton>
+      </div>
+      <div class="row-actions">
+        <MiuixButton
+          :disabled="legadoImporting"
+          @click="legadoImport"
+        >{{ legadoImporting ? "导入中…" : "导入 legado 书架" }}</MiuixButton>
+      </div>
+      <p v-if="legadoLastSyncAt" class="sub" style="margin-top: 8px">
+        最近同步：{{ new Date(legadoLastSyncAt).toLocaleString() }}
+      </p>
+      <p class="hint">
+        「立即双向同步」先拉取 legado 的进度合并进本站，再把本站较新的进度推回远端，
+        方向合并均按更新时间"新者胜"，不会互相覆盖。「导入 legado 书架」是可选操作：
+        从最新一份 legado 全量备份(backup*.zip)读出书架与进度入库。
+      </p>
     </MiuixCard>
 
     <!-- 备份状态 -->

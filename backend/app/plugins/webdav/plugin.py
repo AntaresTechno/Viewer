@@ -15,6 +15,14 @@
 - ``PUT  /api/webdav/server``        开启或关闭服务端
 - ``POST /api/webdav/server/secret`` 生成/重置独立访问密码（仅返回一次）
 
+以及 **legado 备份同步**（复用同一远端服务器，连接外部的 WebDAV，见
+``legado_sync.py``）：
+
+- ``GET  /api/webdav/legado``        查询 legado 同步配置/最近同步时间
+- ``PUT  /api/webdav/legado``        保存 legado 目录并开关同步
+- ``POST /api/webdav/legado/sync``   双向/拉取/推送 legado 阅读进度
+- ``POST /api/webdav/legado/import`` 从最新 legado 全量备份导入书架（可选）
+
 每日自动备份由 daily_refresh 服务在目录刷新后触发（配置里 auto_backup 开启）。
 """
 
@@ -38,8 +46,8 @@ meta = {
     "name": "webdav",
     "mount": "webdav",
     "title": "WebDAV 备份",
-    "version": "1.1.0",
-    "description": "书架/进度/统计备份到 WebDAV 网盘；内置 legado 兼容的 WebDAV 服务端（/dav 进度同步）",
+    "version": "1.2.0",
+    "description": "书架/进度/统计备份到 WebDAV 网盘；内置 legado 兼容的 WebDAV 服务端（/dav 进度同步）与外部 WebDAV 的 legado 备份同步",
     "order": 40,
     "permissions": [("webdav.use", "使用 WebDAV 备份/同步")],
     # 站点根路径专用路由：legado 同步服务端（见 dav_server.py）
@@ -333,6 +341,8 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                 "url": "", "username": "", "directory": "AntaresViewer",
                 "hasPassword": False, "autoBackup": False,
                 "lastBackupAt": None, "lastBackupFile": "",
+                "legadoEnabled": False, "legadoDirectory": "legado",
+                "legadoLastSyncAt": None,
             }
         return {
             "url": c.url,
@@ -342,6 +352,10 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             "autoBackup": bool(c.auto_backup),
             "lastBackupAt": c.last_backup_at.isoformat() if c.last_backup_at else None,
             "lastBackupFile": c.last_backup_file or "",
+            "legadoEnabled": bool(c.legado_enabled),
+            "legadoDirectory": c.legado_directory or "legado",
+            "legadoLastSyncAt": (c.legado_last_sync_at.isoformat()
+                                 if c.legado_last_sync_at else None),
         }
 
     @router.get("/config")
@@ -691,5 +705,79 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                 "updatedAt": r.updated_at.isoformat() if r.updated_at else None,
             })
         return {"items": items[:50], "total": len(items)}
+
+    # ------------------------------------------------- legado 备份同步（外部服务器）
+    @router.get("/legado")
+    async def get_legado_sync(
+        current=Depends(require_perm("webdav.use")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """legado 备份同步配置：复用本插件服务器，另存 legado 目录。"""
+        user, _ = current
+        c = await db.get(WebDavConfig, user.id)
+        return _cfg_dict(c)
+
+    class LegadoBody(BaseModel):
+        enabled: bool = True
+        directory: str = Field(default="legado", max_length=256)
+
+    @router.put("/legado")
+    async def save_legado_sync(
+        body: LegadoBody,
+        current=Depends(require_perm("webdav.use")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """保存 legado 同步目录并设置开关。"""
+        user, _ = current
+        c = await db.get(WebDavConfig, user.id)
+        if c is None:
+            c = WebDavConfig(user_id=user.id)
+            db.add(c)
+        c.legado_enabled = body.enabled
+        c.legado_directory = body.directory.strip().strip("/")
+        await db.commit()
+        return {"ok": True, **_cfg_dict(c)}
+
+    @router.post("/legado/sync")
+    async def legado_sync_now(
+        body: dict | None = None,
+        current=Depends(require_perm("webdav.use")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """与 legado 做双向/拉取/推送进度同步。body 可选 {"direction":"both|pull|push"}。"""
+        from .legado_sync import sync_progress
+
+        user, _ = current
+        c = await db.get(WebDavConfig, user.id)
+        if c is None or not c.url:
+            raise HTTPException(400, "尚未配置本插件的 WebDAV 服务器")
+        if not c.legado_enabled:
+            raise HTTPException(400, "legado 同步未开启：请先点击开关开启")
+        direction = "both"
+        if isinstance(body, dict) and body.get("direction") in (
+                "both", "pull", "push"):
+            direction = body["direction"]
+        result = await sync_progress(user.id, c, direction)
+        await db.refresh(c)
+        return {"ok": True, "direction": direction,
+                "legadoLastSyncAt": (c.legado_last_sync_at.isoformat()
+                                     if c.legado_last_sync_at else None),
+                **result}
+
+    @router.post("/legado/import")
+    async def legado_import_shelf(
+        current=Depends(require_perm("webdav.use")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """（可选）从最新 legado 全量备份 backup*.zip 导入书架与进度。"""
+        from .legado_sync import import_shelf
+
+        user, _ = current
+        c = await db.get(WebDavConfig, user.id)
+        if c is None or not c.url:
+            raise HTTPException(400, "尚未配置本插件的 WebDAV 服务器")
+        if not c.legado_enabled:
+            raise HTTPException(400, "legado 同步未开启：请先点击开关开启")
+        return {"ok": True, **await import_shelf(user.id, c)}
 
     return router

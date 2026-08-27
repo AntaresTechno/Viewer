@@ -342,6 +342,14 @@ class WebDavConfig(Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    # ---- legado 备份同步（复用同一远端服务器，使用 legado 目录）----
+    # 在本插件的服务器(url/user/password)下另存 legado 使用的目录，
+    # 其下 bookProgress/ 存放双向阅读进度，backup*.zip 存放 legado 全量备份。
+    legado_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    legado_directory: Mapped[str] = mapped_column(String(256), default="legado")
+    legado_last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
 
 class DavResource(Base):
