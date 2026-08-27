@@ -114,6 +114,8 @@ async def _migrate_sqlite(conn) -> None:
         "dav_enabled": "BOOLEAN NOT NULL DEFAULT 0",
         "dav_secret_hash": "TEXT NOT NULL DEFAULT ''",
         "last_sync_at": "DATETIME",
+        # 客户端「启用网盘连接」总开关（旧库默认启用）
+        "enabled": "BOOLEAN NOT NULL DEFAULT 1",
         # legado 备份同步（复用同一远端服务器、legado 目录）
         "legado_enabled": "BOOLEAN NOT NULL DEFAULT 0",
         "legado_directory": "VARCHAR(256) NOT NULL DEFAULT 'legado'",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, reactive, ref } from "vue";
 import { MiuixButton, MiuixCard, MiuixInput, MiuixSwitch } from "miuix-vue";
 import PasswordField from "@/components/PasswordField.vue";
 import {
@@ -23,6 +23,13 @@ const username = ref("");
 const password = ref("");
 const directory = ref("AntaresViewer");
 const autoBackup = ref(false);
+const connEnabled = ref(true); // 「连接网盘」启用总开关（持久化，legado 同步依赖它）
+
+/* 各卡片展开状态（默认收起）。标题栏点击即可展开/收起。 */
+const open = reactive({ conn: false, cloud: false, legado: false, server: false });
+function toggleOpen(k: keyof typeof open) {
+  open[k] = !open[k];
+}
 
 const info = ref<WebDavConfigInfo | null>(null);
 const msg = ref("");
@@ -59,7 +66,7 @@ async function saveLegado() {
     legadoDir.value = r.legadoDirectory;
     legadoLastSyncAt.value = r.legadoLastSyncAt;
     msg.value = legadoEnabled.value
-      ? "legado 同步已开启，请先在阅读(legado)里把 WebDAV 目录填写为同一目录"
+      ? "legado 同步已开启，请在 App 里也用同一目录"
       : "legado 同步已关闭";
   } catch (e) {
     err.value = errMsg(e);
@@ -70,7 +77,7 @@ async function saveLegado() {
 
 async function legadoSync(direction: "both" | "pull" | "push", label: string) {
   if (!legadoEnabled.value) {
-    err.value = "请先点击开关开启 legado 同步";
+    err.value = "请先开启 legado 同步";
     return;
   }
   err.value = "";
@@ -80,8 +87,8 @@ async function legadoSync(direction: "both" | "pull" | "push", label: string) {
     const r = await api.webdavLegadoSync(direction);
     legadoLastSyncAt.value = r.legadoLastSyncAt;
     msg.value =
-      `legado 同步完成：拉取 ${r.pulled} · 推送 ${r.pushed} · ` +
-      `合并进度 ${r.progressUpdated} · 待匹配 ${r.pendingMatch}`;
+      `同步完成：拉取 ${r.pulled} · 推送 ${r.pushed} · ` +
+      `合并 ${r.progressUpdated} · 待匹配 ${r.pendingMatch}`;
   } catch (e) {
     err.value = errMsg(e);
   } finally {
@@ -91,19 +98,17 @@ async function legadoSync(direction: "both" | "pull" | "push", label: string) {
 
 async function legadoImport() {
   if (!legadoEnabled.value) {
-    err.value = "请先点击开关开启 legado 同步";
+    err.value = "请先开启 legado 同步";
     return;
   }
-  if (!confirm("从最新一份 legado 全量备份(backup*.zip)导入书架与进度？" +
-    "已存在的书按书名+作者合并进度，不会删除本地条目。")) return;
+  if (!confirm("从最新 legado 全量备份 backup*.zip 导入书架与进度？已合并，不删本地。")) return;
   err.value = "";
   msg.value = "";
   legadoImporting.value = true;
   try {
     const r = await api.webdavLegadoImport();
     msg.value =
-      `导入 legado 书架完成（${r.backup}）：新增书架 ${r.addedShelf} · ` +
-      `更新 ${r.updatedShelf} · 进度 ${r.progressUpdated}`;
+      `导入完成（${r.backup}）：新增 ${r.addedShelf} · 更新 ${r.updatedShelf} · 进度 ${r.progressUpdated}`;
   } catch (e) {
     err.value = errMsg(e);
   } finally {
@@ -149,7 +154,7 @@ async function toggleServer(v: boolean) {
   err.value = "";
   try {
     await api.webdavSaveServer(v);
-    msg.value = v ? "同步服务端已开启" : "同步服务端已关闭";
+    msg.value = v ? "服务端已开启" : "服务端已关闭";
     await loadServer();
   } catch (e) {
     err.value = errMsg(e);
@@ -162,14 +167,14 @@ async function genSecret() {
   err.value = "";
   if (
     server.value?.hasSecret &&
-    !confirm("重新生成后旧密码立即失效，所有已配置的设备需要更新密码。继续？")
+    !confirm("重新生成后旧密码立即失效，所有已配置的设备需更新密码。继续？")
   ) {
     return;
   }
   serverToggling.value = true;
   try {
     secretOnce.value = await api.webdavResetServerSecret();
-    msg.value = "访问密码已生成，请立即复制保存";
+    msg.value = "密码已生成，请立即复制保存";
     await loadServer();
     void loadPending();
   } catch (e) {
@@ -198,6 +203,7 @@ async function load() {
     username.value = c.username;
     directory.value = c.directory || "AntaresViewer";
     autoBackup.value = c.autoBackup;
+    connEnabled.value = c.enabled;
     legadoEnabled.value = c.legadoEnabled;
     legadoDir.value = c.legadoDirectory || "legado";
     legadoLastSyncAt.value = c.legadoLastSyncAt;
@@ -221,10 +227,11 @@ async function save() {
       password: password.value || undefined,
       directory: directory.value.trim(),
       autoBackup: autoBackup.value,
+      enabled: connEnabled.value,
     });
     info.value = r;
     password.value = "";
-    msg.value = "配置已保存";
+    msg.value = "已保存";
   } catch (e) {
     err.value = errMsg(e);
   } finally {
@@ -278,7 +285,7 @@ async function listBackups() {
 }
 
 async function restore(name: string) {
-  if (!confirm(`从「${name}」恢复？书架/进度将按更新时间合并，不会删除本地已有条目。`)) return;
+  if (!confirm(`从「${name}」恢复？按更新时间合并，不删本地已有条目。`)) return;
   err.value = "";
   msg.value = "";
   restoring.value = name;
@@ -319,220 +326,214 @@ function fmtModified(s: string): string {
   <div class="page-webdav">
     <div class="page-head">
       <div>
-        <h2 class="page-title">WebDAV 备份</h2>
-        <p class="page-sub">把书架 / 阅读进度 / 阅读统计备份到你的网盘，可随时恢复</p>
+        <h2 class="page-title">WebDAV</h2>
+        <p class="page-sub">本站数据备份到网盘，或与阅读(legado)互同步进度</p>
+        <div class="status">
+          <span v-if="msg" class="ok">{{ msg }}</span>
+          <span v-if="err" class="err">{{ err }}</span>
+        </div>
       </div>
     </div>
 
-    <!-- 服务器配置 -->
-    <MiuixCard class="card" :show-indication="false">
-      <h3>服务器</h3>
-      <div class="col">
-        <label>服务器地址
-          <MiuixInput v-model="url" single-line placeholder="https://dav.jianguoyun.com/dav/" />
-        </label>
-        <label>账号
-          <MiuixInput v-model="username" single-line placeholder="WebDAV 用户名" />
-        </label>
-        <PasswordField
-          v-model="password"
-          :label="info?.hasPassword ? '密码（已保存，留空则不修改）' : '密码'"
-        />
-        <label>远端目录
-          <MiuixInput v-model="directory" single-line placeholder="AntaresViewer" />
-        </label>
-        <label class="check-row">
-          <input v-model="autoBackup" type="checkbox">
-          <span>每天自动备份一次（在每日目录刷新之后）</span>
-        </label>
-      </div>
-      <div class="row-actions">
-        <MiuixButton type="primary" :disabled="saving" @click="save">保存配置</MiuixButton>
-        <MiuixButton :disabled="testing || saving" @click="testConn">测试连接</MiuixButton>
-        <span v-if="msg" class="ok">{{ msg }}</span>
-        <span v-if="err" class="err">{{ err }}</span>
-      </div>
-      <p class="hint">
-        兼容坚果云 / InfiniCloud / Alist / Nextcloud 等 WebDAV 服务。
-        密码仅混淆存储在本站数据库，接口不会回显。
-      </p>
-    </MiuixCard>
+    <!-- 客户端区：本站作为 WebDAV 客户端，连网盘备份 / 同步 -->
+    <div class="zone">
+      <h2 class="zone-title">客户端 · 网盘备份 / 同步</h2>
 
-    <!-- 同步服务端（legado 兼容） -->
-    <MiuixCard class="card" :show-indication="false">
-      <div class="srv-head">
-        <h3>同步服务端 · 阅读(legado) 进度同步</h3>
-        <MiuixSwitch
-          :model-value="server?.enabled ?? false"
-          :disabled="serverToggling"
-          @update:model-value="(v: boolean) => toggleServer(v)"
-        />
-      </div>
-
-      <template v-if="server">
-        <div class="kv">
-          <span class="k">服务器地址</span>
-          <span class="v mono">{{ server.url }}</span>
-          <button type="button" class="linkbtn" @click="copyText(server.url, 'url')">
-            {{ copied === "url" ? "已复制" : "复制" }}
+      <MiuixCard class="card" :show-indication="false">
+        <div class="srv-head">
+          <button type="button" class="shead" :class="{ open: open.conn }" @click="toggleOpen('conn')">
+            <span>连接网盘</span>
+            <span class="caret" aria-hidden="true"></span>
           </button>
+          <MiuixSwitch
+            :model-value="connEnabled"
+            :disabled="saving"
+            @update:model-value="(v: boolean) => { connEnabled = v; void save(); }"
+          />
         </div>
-        <div class="kv">
-          <span class="k">账号</span>
-          <span class="v mono">{{ server.account }}</span>
+        <div class="sbody" :class="{ collapsed: !open.conn }">
+          <div class="sbody-inner">
+            <div class="flow">本站书架 · 进度 · 统计 <b>---></b> 网盘</div>
+            <div class="col">
+              <label>服务器地址
+                <MiuixInput v-model="url" single-line placeholder="https://dav.jianguoyun.com/dav/" />
+              </label>
+              <label>账号
+                <MiuixInput v-model="username" single-line placeholder="WebDAV 用户名" />
+              </label>
+              <PasswordField
+                v-model="password"
+                :label="info?.hasPassword ? '密码（留空不变）' : '密码'"
+              />
+              <label>远端目录
+                <MiuixInput v-model="directory" single-line placeholder="AntaresViewer" />
+              </label>
+              <label class="check-row">
+                <input v-model="autoBackup" type="checkbox">
+                <span>每日自动备份</span>
+              </label>
+            </div>
+            <div class="row-actions">
+              <MiuixButton type="primary" :disabled="saving" @click="save">保存</MiuixButton>
+              <MiuixButton :disabled="testing || saving" @click="testConn">测试</MiuixButton>
+            </div>
+            <p class="hint">兼容坚果云 / Alist / InfiniCloud / Nextcloud。密码不对外回显。</p>
+          </div>
         </div>
-        <div class="kv">
-          <span class="k">访问密码</span>
-          <span v-if="secretOnce" class="v mono secret">{{ secretOnce }}</span>
-          <span v-else-if="server.hasSecret" class="v">已设置（不显示）</span>
-          <span v-else class="v warn">未生成 — 开启开关即可自动生成</span>
-          <button
-            type="button"
-            class="linkbtn"
+      </MiuixCard>
+
+      <MiuixCard class="card" :show-indication="false">
+        <button type="button" class="shead" :class="{ open: open.cloud }" @click="toggleOpen('cloud')">
+          <span>云端备份</span>
+          <span class="caret" aria-hidden="true"></span>
+        </button>
+        <div class="sbody" :class="{ collapsed: !open.cloud }">
+          <div class="sbody-inner">
+            <div class="flow">本站 <b>---></b> 网盘（备份） · 网盘 <b>---></b> 本站（恢复）</div>
+            <div class="row-actions">
+              <MiuixButton type="primary" :disabled="backingUp" @click="backupNow">
+                {{ backingUp ? "备份中…" : "立即备份" }}
+              </MiuixButton>
+              <MiuixButton :disabled="listing" @click="listBackups">刷新</MiuixButton>
+              <span v-if="info?.lastBackupAt" class="sub">上次 {{ new Date(info.lastBackupAt).toLocaleString() }}</span>
+            </div>
+            <div v-if="listing" class="sub">加载中…</div>
+            <p v-else-if="!backups.length" class="sub">无云端备份</p>
+            <ul v-else class="bk-list">
+              <li v-for="b in backups" :key="b.href" class="bk-row">
+                <span class="bk-name">{{ b.name }}</span>
+                <span class="bk-meta">{{ fmtSize(b.size) }} · {{ fmtModified(b.modified) }}</span>
+                <span class="bk-acts">
+                  <button
+                    type="button"
+                    class="linkbtn"
+                    :disabled="restoring === b.name"
+                    @click="restore(b.name)"
+                  >{{ restoring === b.name ? "恢复中…" : "恢复" }}</button>
+                  <button
+                    type="button"
+                    class="linkbtn danger"
+                    @click="removeBackup(b.name)"
+                  >删除</button>
+                </span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </MiuixCard>
+
+      <MiuixCard class="card" :show-indication="false">
+        <div class="srv-head">
+          <button type="button" class="shead" :class="{ open: open.legado }" @click="toggleOpen('legado')">
+            <span>legado 进度同步</span>
+            <span class="caret" aria-hidden="true"></span>
+          </button>
+          <MiuixSwitch
+            :model-value="legadoEnabled"
+            :disabled="legadoSaving || !connEnabled"
+            @update:model-value="(v: boolean) => { legadoEnabled = v; void saveLegado(); }"
+          />
+        </div>
+        <p v-if="!connEnabled" class="hint warn" style="margin: 10px 0 0">
+          legado 同步需先打开「连接网盘」开关方可启用。
+        </p>
+        <div class="sbody" :class="{ collapsed: !open.legado }">
+          <div class="sbody-inner">
+            <div class="flow">本站 <b><--></b> 网盘{bookProgress} <b><--></b> legado</div>
+            <div class="col" style="margin-top: 12px">
+              <label>legado 目录（与 App 内一致）
+                <MiuixInput v-model="legadoDir" single-line placeholder="legado" />
+              </label>
+            </div>
+            <div class="row-actions">
+              <MiuixButton type="primary" :disabled="legadoSyncing !== '' || legadoSaving" @click="saveLegado">
+                {{ legadoSaving ? "保存中…" : "保存" }}
+              </MiuixButton>
+              <MiuixButton :disabled="legadoSyncing !== ''" @click="legadoSync('both', 'both')">
+                {{ legadoSyncing === 'both' ? "同步中…" : "双向同步" }}
+              </MiuixButton>
+              <MiuixButton :disabled="legadoSyncing !== ''" @click="legadoSync('push', 'push')">
+                {{ legadoSyncing === 'push' ? "…" : "推送" }}
+              </MiuixButton>
+              <MiuixButton :disabled="legadoSyncing !== ''" @click="legadoSync('pull', 'pull')">
+                {{ legadoSyncing === 'pull' ? "…" : "拉取" }}
+              </MiuixButton>
+              <MiuixButton :disabled="legadoImporting" @click="legadoImport">
+                {{ legadoImporting ? "导入中…" : "导入书架" }}
+              </MiuixButton>
+            </div>
+            <p v-if="legadoLastSyncAt" class="sub">最近同步 {{ new Date(legadoLastSyncAt).toLocaleString() }}</p>
+            <p class="hint">App 的 WebDAV「目录」填同一值、开阅读进度同步即可。</p>
+          </div>
+        </div>
+      </MiuixCard>
+
+      <p class="risk">风险：恢复 / 同步按「更新时间晚的覆盖早的」合并，旧进度会被覆盖且无法找回 —— 先「立即备份」再操作。</p>
+    </div>
+
+    <!-- 服务端区：本站作为 WebDAV 服务端，供 legado 接入 -->
+    <div class="zone">
+      <h2 class="zone-title">服务端 · 供 legado 接入</h2>
+
+      <MiuixCard class="card" :show-indication="false">
+        <div class="srv-head">
+          <button type="button" class="shead" :class="{ open: open.server }" @click="toggleOpen('server')">
+            <span>同步服务端</span>
+            <span class="caret" aria-hidden="true"></span>
+          </button>
+          <MiuixSwitch
+            :model-value="server?.enabled ?? false"
             :disabled="serverToggling"
-            @click="genSecret"
-          >{{ server.hasSecret ? "重新生成" : "生成密码" }}</button>
-          <button
-            v-if="secretOnce"
-            type="button"
-            class="linkbtn"
-            @click="copyText(secretOnce, 'secret')"
-          >{{ copied === "secret" ? "已复制" : "复制" }}</button>
-        </div>
-        <p v-if="server.lastSyncAt" class="sub" style="margin-top: 8px">
-          最近同步：{{ new Date(server.lastSyncAt).toLocaleString() }}
-        </p>
-
-        <!-- 双端同步说明 + 待匹配列表 -->
-        <div class="sync-flow">
-          <span>legado 阅读 → 上传进度 → 自动入库本站书架</span>
-          <span>本站阅读 → 进度更新 → legado 同步拉取</span>
-        </div>
-        <div v-if="pending.length" class="pending">
-          <p class="sub" style="margin: 0 0 6px">
-            待匹配（{{ pending.length }}）— 已同步进度但书架暂无此书，
-            后台会自动用书源搜索入库；也可手动在本站搜索加入同名书籍，进度将自动关联：
-          </p>
-          <ul class="pending-list">
-            <li v-for="p in pending" :key="p.file">
-              <span>{{ p.name }}<template v-if="p.author"> · {{ p.author }}</template></span>
-              <span class="pm-meta">读到第 {{ p.chapterIndex + 1 }} 章</span>
-            </li>
-          </ul>
+            @update:model-value="(v: boolean) => toggleServer(v)"
+          />
         </div>
 
-        <p class="hint">
-          在阅读(legado) App 的「我的 → 备份与恢复 → WebDAV」中填入上方的
-          服务器地址 / 账号 / 访问密码，并开启「阅读进度同步」即可实现双端同步：
-          legado 上读的书（含新书）会按 书名+作者 匹配书源后自动加入本站书架并带入进度；
-          本站的阅读进度也会合成为同名进度文件供 legado 拉取。仅同步阅读进度资源。
-          若部署在反向代理之后，请按实际访问地址手工填写。
-        </p>
-      </template>
-    </MiuixCard>
+        <div class="sbody" :class="{ collapsed: !open.server }">
+          <div class="sbody-inner">
+            <template v-if="server">
+              <div class="flow">legado <b>---></b> 本站 /dav{bookProgress} <b>---></b> 本站进度</div>
+              <div class="kv">
+                <span class="k">地址</span>
+                <span class="v mono">{{ server.url }}</span>
+                <button type="button" class="linkbtn" @click="copyText(server.url, 'url')">
+                  {{ copied === "url" ? "已复制" : "复制" }}
+                </button>
+              </div>
+              <div class="kv">
+                <span class="k">账号</span>
+                <span class="v mono">{{ server.account }}</span>
+              </div>
+              <div class="kv">
+                <span class="k">密码</span>
+                <span v-if="secretOnce" class="v mono secret">{{ secretOnce }}</span>
+                <span v-else-if="server.hasSecret" class="v">已设置</span>
+                <span v-else class="v warn">未生成</span>
+                <button type="button" class="linkbtn" :disabled="serverToggling" @click="genSecret">
+                  {{ server.hasSecret ? "重生成" : "生成密码" }}
+                </button>
+                <button v-if="secretOnce" type="button" class="linkbtn" @click="copyText(secretOnce, 'secret')">
+                  {{ copied === "secret" ? "已复制" : "复制" }}
+                </button>
+              </div>
+              <p v-if="server.lastSyncAt" class="sub">最近同步 {{ new Date(server.lastSyncAt).toLocaleString() }}</p>
 
-    <!-- legado 备份同步（外部 WebDAV 服务器） -->
-    <MiuixCard class="card" :show-indication="false">
-      <div class="srv-head">
-        <h3>legado 备份同步 · 与阅读(legado)互同步进度</h3>
-        <MiuixSwitch
-          :model-value="legadoEnabled"
-          :disabled="legadoSaving"
-          @update:model-value="(v: boolean) => { legadoEnabled = v; void saveLegado(); }"
-        />
-      </div>
+              <div v-if="pending.length" class="pending">
+                <p class="sub" style="margin: 0 0 6px">待匹配 {{ pending.length }}（已同步进度但书架无此书）：</p>
+                <ul class="pending-list">
+                  <li v-for="p in pending" :key="p.file">
+                    <span>{{ p.name }}<template v-if="p.author"> · {{ p.author }}</template></span>
+                    <span class="pm-meta">第 {{ p.chapterIndex + 1 }} 章</span>
+                  </li>
+                </ul>
+              </div>
 
-      <p class="hint">
-        复用上方「服务器」里已保存的地址 / 账号 / 密码，另填一个 legado 使用的
-        远端目录即可。请在阅读(legado) App 的 WebDAV 设置里把「目录」填为同一值，
-        并开启「阅读进度同步 / WebDAV 备份」，两端就会通过同一个 bookProgress/
-        目录双向同步阅读进度。
-      </p>
-
-      <div class="col" style="margin-top: 12px">
-        <label>legado 远端目录（与阅读 App 中的 WebDAV 目录一致）
-          <MiuixInput v-model="legadoDir" single-line placeholder="legado" />
-        </label>
-      </div>
-
-      <div class="row-actions" style="margin-top: 14px">
-        <MiuixButton
-          type="primary"
-          :disabled="legadoSyncing !== '' || legadoSaving"
-          @click="saveLegado"
-        >{{ legadoSaving ? "保存中…" : "保存配置" }}</MiuixButton>
-        <MiuixButton
-          :disabled="legadoSyncing !== ''"
-          @click="legadoSync('both', 'both')"
-        >{{ legadoSyncing === 'both' ? "同步中…" : "立即双向同步" }}</MiuixButton>
-        <MiuixButton
-          :disabled="legadoSyncing !== ''"
-          @click="legadoSync('push', 'push')"
-        >{{ legadoSyncing === 'push' ? "推送中…" : "仅推送" }}</MiuixButton>
-        <MiuixButton
-          :disabled="legadoSyncing !== ''"
-          @click="legadoSync('pull', 'pull')"
-        >{{ legadoSyncing === 'pull' ? "拉取中…" : "仅拉取" }}</MiuixButton>
-      </div>
-      <div class="row-actions">
-        <MiuixButton
-          :disabled="legadoImporting"
-          @click="legadoImport"
-        >{{ legadoImporting ? "导入中…" : "导入 legado 书架" }}</MiuixButton>
-      </div>
-      <p v-if="legadoLastSyncAt" class="sub" style="margin-top: 8px">
-        最近同步：{{ new Date(legadoLastSyncAt).toLocaleString() }}
-      </p>
-      <p class="hint">
-        「立即双向同步」先拉取 legado 的进度合并进本站，再把本站较新的进度推回远端，
-        方向合并均按更新时间"新者胜"，不会互相覆盖。「导入 legado 书架」是可选操作：
-        从最新一份 legado 全量备份(backup*.zip)读出书架与进度入库。
-      </p>
-    </MiuixCard>
-
-    <!-- 备份状态 -->
-    <MiuixCard v-if="info?.lastBackupAt" class="card" :show-indication="false">
-      <h3>上次备份</h3>
-      <p class="sub">
-        {{ new Date(info.lastBackupAt).toLocaleString() }}
-        <template v-if="info.lastBackupFile"> · {{ info.lastBackupFile }}</template>
-      </p>
-    </MiuixCard>
-
-    <!-- 备份文件 -->
-    <MiuixCard class="card" :show-indication="false">
-      <h3>云端备份</h3>
-      <div class="row-actions" style="margin-top: 0">
-        <MiuixButton type="primary" :disabled="backingUp" @click="backupNow">
-          {{ backingUp ? "备份中…" : "立即备份" }}
-        </MiuixButton>
-        <MiuixButton :disabled="listing" @click="listBackups">刷新列表</MiuixButton>
-      </div>
-
-      <div v-if="listing" class="sub" style="margin-top: 12px">加载中…</div>
-      <p v-else-if="!backups.length" class="sub" style="margin-top: 12px">
-        还没有云端备份文件。
-      </p>
-      <ul v-else class="bk-list">
-        <li v-for="b in backups" :key="b.href" class="bk-row">
-          <span class="bk-name">{{ b.name }}</span>
-          <span class="bk-meta">{{ fmtSize(b.size) }} · {{ fmtModified(b.modified) }}</span>
-          <span class="bk-acts">
-            <button
-              type="button"
-              class="linkbtn"
-              :disabled="restoring === b.name"
-              @click="restore(b.name)"
-            >{{ restoring === b.name ? "恢复中…" : "恢复" }}</button>
-            <button
-              type="button"
-              class="linkbtn danger"
-              @click="removeBackup(b.name)"
-            >删除</button>
-          </span>
-        </li>
-      </ul>
-    </MiuixCard>
+              <p class="hint">legado「我的 → 备份与恢复 → WebDAV」填上面的 地址/账号/密码，开「阅读进度同步」。</p>
+              <p class="risk">风险：此密码即访问凭据，泄露可被别人读取你的进度；反代部署请手填地址。</p>
+            </template>
+          </div>
+        </div>
+      </MiuixCard>
+    </div>
   </div>
 </template>
 
@@ -544,9 +545,77 @@ function fmtModified(s: string): string {
   --app-card-pad: 22px;
   margin-bottom: 14px;
 }
-h3 {
-  margin: 0 0 12px;
+.shead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
   font-size: 15px;
+  font-weight: 700;
+  color: inherit;
+  text-align: left;
+  font-family: inherit;
+}
+.srv-head .shead {
+  flex: 1;
+}
+.caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  margin-top: 3px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--m-color-on-surface-secondary);
+  transition: transform 0.25s ease;
+}
+.shead.open .caret {
+  transform: rotate(180deg);
+}
+/* 展开/收起动画：grid 行高从 0fr ⇄ 1fr + 淡入淡出 */
+.sbody {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.3s ease, opacity 0.22s ease;
+}
+.sbody.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+.sbody-inner {
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 14px;
+}
+.zone-title {
+  margin: 22px 0 10px;
+  font-size: 13px;
+  color: var(--m-color-on-surface-secondary);
+  letter-spacing: 0.04em;
+}
+.page-head h2 {
+  font-size: 20px;
+  margin: 0;
+}
+.zone-title::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 11px;
+  margin-right: 8px;
+  vertical-align: -1px;
+  border-radius: 2px;
+  background: var(--m-color-primary);
+}
+.status {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .col {
   display: flex;
@@ -570,6 +639,22 @@ h3 {
   gap: 12px;
   flex-wrap: wrap;
 }
+.flow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 0 14px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--m-color-primary) 8%, transparent);
+  font-size: 13px;
+  color: var(--m-color-on-surface);
+}
+.flow b {
+  color: var(--m-color-primary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
 .ok {
   color: var(--m-color-primary);
   font-size: 13px;
@@ -582,6 +667,18 @@ h3 {
   margin-top: 10px;
   font-size: 12px;
   color: var(--m-color-on-background-variant, var(--m-color-on-surface-secondary));
+}
+.hint.warn {
+  color: var(--m-color-error);
+}
+.risk {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--m-color-error) 12%, transparent);
+  color: var(--m-color-error);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 .srv-head {
   display: flex;
@@ -603,7 +700,7 @@ h3 {
 .kv .k {
   color: var(--m-color-on-surface-secondary);
   flex: none;
-  width: 72px;
+  width: 44px;
 }
 .kv .v {
   min-width: 0;
@@ -618,14 +715,6 @@ h3 {
 }
 .kv .warn {
   color: var(--m-color-error);
-}
-.sync-flow {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12.5px;
-  color: var(--m-color-primary);
 }
 .pending {
   margin-top: 12px;
@@ -657,6 +746,21 @@ h3 {
 .sub {
   color: var(--m-color-on-surface-secondary);
   font-size: 13px;
+}
+.linkbtn {
+  background: none;
+  border: none;
+  color: var(--m-color-primary);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+.linkbtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.linkbtn.danger {
+  color: var(--m-color-error);
 }
 .bk-list {
   list-style: none;
@@ -695,6 +799,9 @@ h3 {
 @media (max-width: 560px) {
   .bk-row {
     flex-wrap: wrap;
+  }
+  .zone-title {
+    margin-top: 18px;
   }
 }
 </style>

@@ -339,7 +339,7 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         if c is None:
             return {
                 "url": "", "username": "", "directory": "AntaresViewer",
-                "hasPassword": False, "autoBackup": False,
+                "hasPassword": False, "autoBackup": False, "enabled": True,
                 "lastBackupAt": None, "lastBackupFile": "",
                 "legadoEnabled": False, "legadoDirectory": "legado",
                 "legadoLastSyncAt": None,
@@ -350,6 +350,7 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             "directory": c.directory or "AntaresViewer",
             "hasPassword": bool(c.password_enc),
             "autoBackup": bool(c.auto_backup),
+            "enabled": bool(c.enabled),
             "lastBackupAt": c.last_backup_at.isoformat() if c.last_backup_at else None,
             "lastBackupFile": c.last_backup_file or "",
             "legadoEnabled": bool(c.legado_enabled),
@@ -374,6 +375,7 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         password: str = Field(default="", max_length=256)
         directory: str = Field(default="AntaresViewer", max_length=256)
         autoBackup: bool = False
+        enabled: bool = True
 
     @router.put("/config")
     async def save_config(
@@ -397,6 +399,7 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             c.password_enc = _enc_pwd(body.password)
         c.directory = body.directory.strip().strip("/")
         c.auto_backup = body.autoBackup
+        c.enabled = body.enabled
         await db.commit()
         return {"ok": True, **_cfg_dict(c)}
 
@@ -751,6 +754,8 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         c = await db.get(WebDavConfig, user.id)
         if c is None or not c.url:
             raise HTTPException(400, "尚未配置本插件的 WebDAV 服务器")
+        if not c.enabled:
+            raise HTTPException(400, "尚未启用连接网盘：请在 WebDAV 页打开「连接网盘」开关")
         if not c.legado_enabled:
             raise HTTPException(400, "legado 同步未开启：请先点击开关开启")
         direction = "both"
@@ -776,6 +781,8 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         c = await db.get(WebDavConfig, user.id)
         if c is None or not c.url:
             raise HTTPException(400, "尚未配置本插件的 WebDAV 服务器")
+        if not c.enabled:
+            raise HTTPException(400, "尚未启用连接网盘：请在 WebDAV 页打开「连接网盘」开关")
         if not c.legado_enabled:
             raise HTTPException(400, "legado 同步未开启：请先点击开关开启")
         return {"ok": True, **await import_shelf(user.id, c)}

@@ -331,6 +331,8 @@ class WebDavConfig(Base):
     password_enc: Mapped[str] = mapped_column(Text, default="")
     directory: Mapped[str] = mapped_column(String(256), default="AntaresViewer")
     auto_backup: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 客户端「启用网盘连接」总开关；关闭后备份/legado 同步不可用
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_backup_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )

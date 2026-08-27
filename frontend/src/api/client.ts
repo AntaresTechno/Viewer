@@ -286,6 +286,7 @@ export interface WebDavConfigInfo {
   directory: string;
   hasPassword: boolean;
   autoBackup: boolean;
+  enabled: boolean;
   lastBackupAt: string | null;
   lastBackupFile: string;
   legadoEnabled: boolean;
@@ -897,6 +898,7 @@ export const api = {
     password?: string;
     directory: string;
     autoBackup: boolean;
+    enabled: boolean;
   }) => {
     const r = await http.put<{ ok: boolean } & WebDavConfigInfo>(
       "/webdav/config",
