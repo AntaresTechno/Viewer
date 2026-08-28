@@ -711,10 +711,10 @@ function onConnVisibility() {
 
 /* ================= 内容区 ================= */
 .main {
-  flex: 1;
+  flex: 0 1 1160px;
   min-width: 0;
+  margin: 0 auto; /* 内容区在侧栏右侧剩余区域内水平居中；侧栏与页内组件不动 */
   padding: 26px 34px 48px;
-  max-width: 1160px;
 }
 
 /* ================= 移动端 ================= */
@@ -750,6 +750,7 @@ function onConnVisibility() {
     padding: 18px 16px calc(84px + env(safe-area-inset-bottom));
     max-width: none;
     width: 100%;
+    flex-basis: auto; /* 覆盖桌面行向的 1160px 高度基准 */
   }
 
   /* 底部标签栏：拇指区、毛玻璃、安全区适配 */
