@@ -10,6 +10,7 @@ import {
 import { api, errMsg } from "@/api/client";
 import type { EngineInfo, SourceRow } from "@/api/client";
 import { collectGroups, splitGroups } from "@/utils/sourceGroups";
+import SourceLoginDialog from "@/components/SourceLoginDialog.vue";
 
 const items = ref<SourceRow[]>([]);
 const engines = ref<EngineInfo[]>([]);
@@ -64,6 +65,15 @@ function onJsonDrop(e: DragEvent) {
 /* raw view */
 const rawOpen = ref<Record<string, unknown> | null>(null);
 const rawName = ref("");
+
+/* source login dialog */
+const loginTarget = ref<SourceRow | null>(null);
+const showLogin = ref(false);
+
+function openLogin(s: SourceRow) {
+  loginTarget.value = s;
+  showLogin.value = true;
+}
 
 async function load() {
   loading.value = true;
@@ -198,6 +208,11 @@ function filtered() {
             </td>
             <td>
               <button
+                v-if="s.engine === 'legado'"
+                class="linkbtn"
+                @click="openLogin(s)"
+              >登录</button>
+              <button
                 class="linkbtn danger"
                 @click="removeSelected(s)"
               >删除</button>
@@ -209,6 +224,13 @@ function filtered() {
         </tbody>
       </table>
     </MiuixCard>
+
+    <SourceLoginDialog
+      v-model="showLogin"
+      v-if="loginTarget"
+      :source-url="loginTarget.sourceUrl"
+      :source-name="loginTarget.sourceName"
+    />
 
     <MiuixDialog v-model="showImport" title="导入书源">
       <div class="dlg">

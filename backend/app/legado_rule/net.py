@@ -139,6 +139,34 @@ def _merge_headers(headers: dict[str, str] | None) -> dict[str, str]:
     return base
 
 
+def _attach_cookie(url: str, headers: dict[str, str]) -> dict[str, str]:
+    """CookieManager.loadRequest：请求未显式携带 Cookie 时附加域名 Cookie。
+
+    与 legado setCookie 注释的优先级一致：urlOption/显式 Cookie > 存储 Cookie。
+    """
+    if any(k.lower() == "cookie" for k in headers):
+        return headers
+    from . import source_state
+
+    cookie = source_state.get_cookie(url)
+    if cookie:
+        return {**headers, "Cookie": cookie}
+    return headers
+
+
+def _capture_cookies(resp: httpx.Response) -> None:
+    """CookieManager.saveResponse：把响应（含重定向链）的 Set-Cookie 合并入存储。"""
+    from . import source_state
+
+    for r in [*resp.history, resp]:
+        try:
+            set_cookies = r.headers.get_list("set-cookie")
+        except Exception:  # noqa: BLE001
+            set_cookies = []
+        if set_cookies:
+            source_state.save_response_cookies(str(r.url), set_cookies)
+
+
 async def fetch(
     url: str,
     *,
@@ -148,19 +176,25 @@ async def fetch(
     charset: str | None = None,
     timeout: float | None = None,
     retries: int = 0,
+    cookie_jar: bool = False,
 ) -> StrResponse:
     last_error: Exception | None = None
     attempts = max(1, retries + 1)
     client = get_async_client()
     for attempt in range(attempts):
         try:
+            merged = _merge_headers(headers)
+            if cookie_jar:
+                merged = _attach_cookie(url, merged)
             resp = await client.request(
                 method.upper(),
                 url,
-                headers=_merge_headers(headers),
+                headers=merged,
                 content=body.encode("utf-8") if body and method.upper() == "POST" else None,
                 timeout=timeout or settings.request_timeout,
             )
+            if cookie_jar:
+                _capture_cookies(resp)
             text = decode_body(resp.content, charset)
             return StrResponse(str(resp.url), text, resp.status_code, dict(resp.headers))
         except Exception as exc:  # noqa: BLE001
@@ -182,15 +216,18 @@ def fetch_sync_ex(
     charset: str | None = None,
     timeout: float | None = None,
     retries: int = 0,
+    cookie_jar: bool = False,
 ) -> StrResponse:
     """Synchronous request honoring an AnalyzeUrl RequestSpec (method/headers/
     body/charset), mirroring legado's AnalyzeUrl.getStrResponse for java.ajax."""
     last_error: Exception | None = None
     attempts = max(1, retries + 1)
     client = get_sync_client()
-    merged = _merge_headers(headers)
     for _ in range(attempts):
         try:
+            merged = _merge_headers(headers)
+            if cookie_jar:
+                merged = _attach_cookie(url, merged)
             resp = client.request(
                 method.upper(),
                 url,
@@ -199,6 +236,8 @@ def fetch_sync_ex(
                 if body and method.upper() == "POST" else None,
                 timeout=timeout or settings.request_timeout,
             )
+            if cookie_jar:
+                _capture_cookies(resp)
             text = decode_body(resp.content, charset)
             return StrResponse(str(resp.url), text, resp.status_code,
                                dict(resp.headers))
@@ -207,14 +246,25 @@ def fetch_sync_ex(
     return StrResponse(url, f"请求失败: {last_error}", status=0, error=str(last_error))
 
 
-def post_sync(url: str, *, body: str = "", headers=None, timeout: float | None = None) -> StrResponse:
+def post_sync(
+    url: str,
+    *,
+    body: str = "",
+    headers=None,
+    timeout: float | None = None,
+    cookie_jar: bool = False,
+) -> StrResponse:
     merged = _merge_headers(headers if isinstance(headers, dict) else None)
     merged.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    if cookie_jar:
+        merged = _attach_cookie(url, merged)
     try:
         resp = get_sync_client().post(
             url, headers=merged, content=body.encode("utf-8"),
             timeout=timeout or settings.request_timeout,
         )
+        if cookie_jar:
+            _capture_cookies(resp)
         return StrResponse(str(resp.url), decode_body(resp.content), resp.status_code,
                            dict(resp.headers))
     except Exception as exc:  # noqa: BLE001

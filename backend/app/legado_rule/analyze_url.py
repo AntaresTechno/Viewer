@@ -34,6 +34,27 @@ class RequestSpec:
     web_view: bool = False
     web_js: str | None = None
     proxy: str | None = None
+    # 登录/Cookie 支撑：发起方书源主键 + 是否启用 cookieJar
+    # （legado JSON 语义：enabledCookieJar 缺省即 true）
+    source_key: str = ""
+    cookie_jar: bool = False
+
+
+def _ns_bridges(source: dict | None) -> dict:
+    """legado evalJS 公共命名空间桥（source/cookie/cache），惰性导入避免环。"""
+    if not isinstance(source, dict) or not source:
+        return {}
+    from .source_bridge import bridges_for
+
+    return bridges_for(source)
+
+
+def _login_header_map(source: dict | None) -> dict[str, str] | None:
+    if not isinstance(source, dict) or not source:
+        return None
+    from . import source_state
+
+    return source_state.get_login_header_map(str(source.get("bookSourceUrl") or ""))
 
 
 def get_absolute_url(base_url: str | None, relative: str) -> str:
@@ -291,40 +312,60 @@ class AnalyzeUrl:
             raise RuleError(f"URL 参数解析失败: {text[:80]}…") from None
 
     def _source_headers(self) -> dict[str, str] | None:
+        """解析书源请求头并合并登录头（BaseSource.getHeaderMap 语义）。
+
+        顺序对齐 legado：header 规则（JSON 或 @js 动态）→ 缺省 UA →
+        登录头覆盖合并。
+        """
         raw = self.source.get("header") if isinstance(self.source, dict) else None
-        if not raw:
-            return None
-        rule_text = str(raw)
-        # ligand 书源 header 常写成 @js: / <js> 动态生成（如按浏览器拼 UA）。
-        # 旧实现只认纯 JSON，遇到 @js: 直接丢弃，导致请求用默认 UA 被站点拒/限。
-        low = rule_text.strip().lower()
-        if low.startswith("@js:") or low.startswith("<js>"):
-            try:
-                m = JS_PATTERN.search(rule_text)
-                if not m:
-                    return None
-                code = m.group(2) or m.group(1)
-                val = eval_js(code, {
-                    "source": self.source or None,
-                    "baseUrl": self.base_url,
-                    "result": None,
-                    "page": self.page,
-                    "key": self.key,
-                })
-                if isinstance(val, str):
-                    val = json.loads(val)
-                if isinstance(val, dict):
-                    return {str(k): str(v) for k, v in val.items()}
-            except Exception:  # noqa: BLE001 - 头失败不应让请求整体崩掉
-                return None
-            return None
-        try:
-            obj = json.loads(rule_text) if isinstance(rule_text, str) else rule_text
-            if isinstance(obj, dict):
-                return {str(k): str(v) for k, v in obj.items()}
-        except Exception:  # noqa: BLE001
-            return None
-        return None
+        out: dict[str, str] = {}
+        if raw:
+            rule_text = str(raw)
+            # ligand 书源 header 常写成 @js: / <js> 动态生成（如按浏览器拼 UA）。
+            # 旧实现只认纯 JSON，遇到 @js: 直接丢弃，导致请求用默认 UA 被站点拒/限。
+            low = rule_text.strip().lower()
+            if low.startswith("@js:") or low.startswith("<js>"):
+                try:
+                    m = JS_PATTERN.search(rule_text)
+                    if not m:
+                        return self._finish_headers(out)
+                    code = m.group(2) or m.group(1)
+                    val = eval_js(code, {
+                        "source": self.source or None,
+                        "baseUrl": self.base_url,
+                        "result": None,
+                        "page": self.page,
+                        "key": self.key,
+                        "__ns__": _ns_bridges(self.source),
+                    })
+                    if isinstance(val, str):
+                        val = json.loads(val)
+                    if isinstance(val, dict):
+                        for k, v in val.items():
+                            out[str(k)] = str(v)
+                except Exception:  # noqa: BLE001 - 头失败不应让请求整体崩掉
+                    return self._finish_headers(out)
+            else:
+                try:
+                    obj = json.loads(rule_text) if isinstance(rule_text, str) else rule_text
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            out[str(k)] = str(v)
+                except Exception:  # noqa: BLE001
+                    return self._finish_headers(out)
+        return self._finish_headers(out)
+
+    def _finish_headers(self, out: dict[str, str]) -> dict[str, str]:
+        """补默认 UA 并合并登录头（getHeaderMap 的 UA/登录头两步）。"""
+        if not any(k.lower() == "user-agent" for k in out):
+            from ..core.config import settings as _settings
+
+            out.setdefault("User-Agent", _settings.default_user_agent)
+        login_header = _login_header_map(self.source)
+        if login_header:
+            for k, v in login_header.items():
+                out[str(k)] = str(v)
+        return out or None
 
     def _eval(self, code: str, result: Any = None) -> Any:
         bindings: dict[str, Any] = {
@@ -338,6 +379,7 @@ class AnalyzeUrl:
             "result": result,
             "infoMap": self.info_map,
             "__bridge__": _UrlBridge(self),
+            "__ns__": _ns_bridges(self.source),
         }
         return eval_js(code, bindings)
 
@@ -358,6 +400,7 @@ class AnalyzeUrl:
             else:
                 body = self.body
                 headers.setdefault("Content-Type", "application/json; charset=UTF-8")
+        src = self.source if isinstance(self.source, dict) else {}
         return RequestSpec(
             url=self.url_no_query if self.method in ("POST", "HEAD") else self.url,
             method=self.method,
@@ -370,6 +413,8 @@ class AnalyzeUrl:
             web_view=self.use_web_view,
             web_js=self.web_js,
             proxy=self.proxy,
+            source_key=str(src.get("bookSourceUrl") or ""),
+            cookie_jar=src.get("enabledCookieJar") is not False if src else False,
         )
 
 

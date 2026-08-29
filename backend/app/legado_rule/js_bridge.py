@@ -68,9 +68,11 @@ def source_js_lib(source: Any) -> str:
 class JavaBridge:
     """Bound as ``java`` inside rule scripts."""
 
-    def __init__(self, owner: Any = None, base_url: str = ""):
+    def __init__(self, owner: Any = None, base_url: str = "",
+                 source: dict | None = None):
         self._owner = owner          # AnalyzeRule / AnalyzeUrl for delegation
         self.base_url = base_url
+        self._explicit_source = source if isinstance(source, dict) else None
         self._cache: dict[str, str] = {}
 
     # ---------------------------------------------------------- rule access
@@ -97,6 +99,8 @@ class JavaBridge:
 
     # -------------------------------------------------------------- network
     def _owner_source(self) -> dict | None:
+        if isinstance(self._explicit_source, dict):
+            return self._explicit_source
         src = getattr(self._owner, "source", None)
         return src if isinstance(src, dict) else None
 
@@ -120,6 +124,7 @@ class JavaBridge:
             charset=spec.charset,
             timeout=float(call_timeout) if call_timeout else None,
             retries=spec.retry,
+            cookie_jar=spec.cookie_jar,
         )
 
     def ajax(self, url, call_timeout=None) -> str:
@@ -142,9 +147,14 @@ class JavaBridge:
     def post(self, url: str, body: str, headers=None) -> str:
         from .net import post_sync
 
+        src = self._owner_source()
         try:
-            resp = post_sync(url, body=body,
-                             headers=headers if isinstance(headers, dict) else None)
+            resp = post_sync(
+                url, body=body,
+                headers=headers if isinstance(headers, dict) else None,
+                cookie_jar=src.get("enabledCookieJar") is not False
+                if isinstance(src, dict) else False,
+            )
             return resp.body
         except Exception as exc:  # noqa: BLE001
             return f"post({url}) error: {exc}"
@@ -277,6 +287,8 @@ _BRIDGE_METHODS = [
     name for name in dir(JavaBridge)
     if not name.startswith("_") and callable(getattr(JavaBridge, name))
 ]
+# 说明：JsEvaluator 现按传入桥实例的 dir() 动态收集方法（见 _ns_methods），
+# 以支持 SourceLoginBridge 等 JavaBridge 子类追加的登录扩展。
 
 
 class RuleJSError(Exception):
@@ -302,6 +314,11 @@ class JsEvaluator:
         self.engine = detect_engine()
         self.bridge: JavaBridge = bindings.pop("__bridge__", None) or JavaBridge()
         self.js_lib = source_js_lib(bindings.get("source"))
+        # __ns__: 命名空间桥 {name: object}。桥对象的公开方法挂到同名
+        # JS 全局（source/cookie/cache），若 bindings 里另有同名 dict，
+        # 其字段会合并进该对象（方法保留）—— 对齐 legado 把
+        # BaseSource / CookieStore / CacheManager 实例绑进 Rhino 的语义。
+        self.ns_bridges: dict[str, Any] = bindings.pop("__ns__", None) or {}
         if self.engine == "quickjs":
             self._ctx_quickjs(bindings)
         elif self.engine == "dukpy":
@@ -312,13 +329,21 @@ class JsEvaluator:
                 "（pip install quickjs / pip install dukpy）以启用书源中的 @js/{{}} 规则"
             )
 
+    # ------------------------------------------------- namespace bridges
+    @staticmethod
+    def _ns_methods(obj: Any) -> list[str]:
+        return [
+            name for name in dir(obj)
+            if not name.startswith("_") and callable(getattr(obj, name, None))
+        ]
+
     # ------------------------------------------------------------- quickjs
     def _ctx_quickjs(self, bindings: dict[str, Any]) -> None:
         import quickjs
 
         ctx = quickjs.Context()
         lines: list[str] = ["var java = {};"]
-        for name in _BRIDGE_METHODS:
+        for name in self._ns_methods(self.bridge):
             fn = getattr(self.bridge, name, None)
             if fn is None or not callable(fn):
                 continue
@@ -330,16 +355,44 @@ class JsEvaluator:
                 f"java.{name} = function() {{ var r = __py_{name}.apply(null, "
                 f"Array.prototype.slice.call(arguments)); return r === undefined ? null : r; }};"
             )
-        lines.append("var cookie = {}; cookie.getKey = function(){ return ''; };")
-        lines.append("var cache = java;")
+        for ns, obj in self.ns_bridges.items():
+            if not ns.isidentifier():
+                continue
+            for name in self._ns_methods(obj):
+                fn = getattr(obj, name, None)
+                if fn is None:
+                    continue
+                try:
+                    ctx.add_callable(f"__py_ns_{ns}_{name}", fn)
+                except Exception:  # noqa: BLE001
+                    continue
+                lines.append(
+                    f"{ns}.{name} = function() {{ var r = __py_ns_{ns}_{name}"
+                    f".apply(null, Array.prototype.slice.call(arguments)); "
+                    f"return r === undefined ? null : r; }};"
+                )
+        if "cookie" not in self.ns_bridges:
+            lines.append("var cookie = {}; cookie.getKey = function(){ return ''; };")
+        if "cache" not in self.ns_bridges:
+            lines.append("var cache = java;")
         if self.js_lib:
             # source jsLib first so rules can call its functions; it may use java.*
             lines.append(self.js_lib)
         for k, v in bindings.items():
-            if k.isidentifier():
-                lines.append(
-                    f"var {k} = {json.dumps(_safe_json(v), ensure_ascii=False)};"
-                )
+            if not k.isidentifier():
+                continue
+            if k in self.ns_bridges:
+                if isinstance(v, dict):
+                    fields = json.dumps(_safe_json(v), ensure_ascii=False)
+                    # 合并字段进 ns 对象，保留已挂载的方法
+                    lines.append(
+                        f"(function(){{var d={fields};"
+                        f"for(var p in d){{{k}[p]=d[p];}}}})();"
+                    )
+                continue
+            lines.append(
+                f"var {k} = {json.dumps(_safe_json(v), ensure_ascii=False)};"
+            )
         try:
             ctx.eval("\n".join(lines))
         except Exception as exc:  # noqa: BLE001
@@ -352,7 +405,7 @@ class JsEvaluator:
 
         interp = dukpy.JSInterpreter()
         names: list[str] = []
-        for name in _BRIDGE_METHODS:
+        for name in self._ns_methods(self.bridge):
             fn = getattr(self.bridge, name, None)
             if fn is None or not callable(fn):
                 continue
@@ -365,16 +418,45 @@ class JsEvaluator:
                 f".concat(Array.prototype.slice.call(arguments)); "
                 f"return globalThis.call_python.apply(null, args); }};"
             )
-        lines.append("var cookie = {}; cookie.getKey = function(){ return ''; };")
-        lines.append("var cache = java;")
+        self._ns_names: set[str] = set()
+        for ns, obj in self.ns_bridges.items():
+            if not ns.isidentifier():
+                continue
+            self._ns_names.add(ns)
+            ns_names: list[str] = []
+            for name in self._ns_methods(obj):
+                fn = getattr(obj, name, None)
+                if fn is None:
+                    continue
+                interp.export_function(f"{ns}.{name}", fn)
+                ns_names.append(name)
+            lines.append(f"var {ns} = {{}};")
+            for name in ns_names:
+                lines.append(
+                    f"{ns}['{name}'] = function() {{ var args = ['{ns}.{name}']"
+                    f".concat(Array.prototype.slice.call(arguments)); "
+                    f"return globalThis.call_python.apply(null, args); }};"
+                )
+        if "cookie" not in self.ns_bridges:
+            lines.append("var cookie = {}; cookie.getKey = function(){ return ''; };")
+        if "cache" not in self.ns_bridges:
+            lines.append("var cache = java;")
         if self.js_lib:
             # dukpy keeps a persistent global scope per interpreter: evaluating
             # the jsLib during the validation run defines its functions for all
             # subsequent evaljs() calls on this interpreter.
             lines.append(self.js_lib)
         for k, v in bindings.items():
-            if k.isidentifier():
-                lines.append(f"var {k} = dukpy['{k}'];")
+            if not k.isidentifier():
+                continue
+            if k in self._ns_names:
+                # 字段在预检运行时合并进 ns 对象（dukpy 全局作用域持久）
+                lines.append(
+                    f"(function(){{var d=dukpy['{k}'];"
+                    f"if(d){{for(var p in d){{{k}[p]=d[p];}}}}}})();"
+                )
+                continue
+            lines.append(f"var {k} = dukpy['{k}'];")
         self._dukpy_interp = interp
         self._dukpy_prelude = "\n".join(lines)
         self._dukpy_vars = {k: _safe_json(v) for k, v in bindings.items()}
@@ -412,10 +494,13 @@ class JsEvaluator:
                 # dukpy 的全局作用域跨 evaljs 持久，但预检只执行过一次
                 # 「var x = dukpy['x']」绑定；set_binding 更新的是传入的
                 # vars 字典。因此每次求值前先把当前 vars 重绑到全局，
-                # 保证规则读到的是最新值。
+                # 保证规则读到的是最新值。ns 桥（source 等）的字段已在
+                # 预检时合并进带方法的对象，重绑会抹掉方法，必须跳过。
+                ns_names = getattr(self, "_ns_names", set())
                 binds = ";".join(
                     f"{k} = dukpy[{json.dumps(k)}]"
-                    for k in self._dukpy_vars if k.isidentifier()
+                    for k in self._dukpy_vars
+                    if k.isidentifier() and k not in ns_names
                 )
                 result = self._dukpy_interp.evaljs(
                     binds + "\n" + code + "\n;", **self._dukpy_vars

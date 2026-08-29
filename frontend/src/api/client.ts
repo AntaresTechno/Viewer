@@ -78,6 +78,41 @@ export interface SourceRow {
   engine: string;
 }
 
+/* ------------------------------------------------- legado 书源登录 */
+/** loginUi 行（RowUi），type: text/password/button/toggle/select */
+export interface LoginRow {
+  name: string;
+  title: string;
+  type: string;
+  action?: string | null;
+  chars?: string[] | null;
+  default?: string | null;
+}
+
+/** 书源登录表单快照（登录头/Cookie 含敏感信息，仅管理端展示）。 */
+export interface LoginForm {
+  sourceUrl: string;
+  sourceName: string;
+  /** none=源未配置登录；form=loginUi 表单；web=仅登录网址 */
+  mode: "none" | "form" | "web";
+  webUrl?: string | null;
+  rows: LoginRow[];
+  values: Record<string, string>;
+  hasInfo: boolean;
+  hasLoginHeader: boolean;
+  loginHeader?: string | null;
+  cookie: string;
+}
+
+export interface LoginRunResult {
+  ok: boolean;
+  error: string | null;
+  log: string[];
+  values: Record<string, string>;
+  openUrl?: string | null;
+  rebuild?: boolean;
+}
+
 /** 单个书源的完整信息 + 规则快照（详情页展示"源规则/书源"用）。 */
 export interface SourceInfo {
   name: string;
@@ -451,6 +486,47 @@ export const api = {
       { timeout: 120_000 },
     );
     return r.data;
+  },
+
+  /* ------------------------------------------------- legado 书源登录 */
+  legadoLoginForm: async (sourceUrl: string) => {
+    const r = await http.get<LoginForm>(
+      `/legado/login/form?source_url=${encodeURIComponent(sourceUrl)}`,
+    );
+    return r.data;
+  },
+  /** 保存登录信息并执行书源 login() JS；values 传 null 清除登录信息。 */
+  legadoLoginSubmit: async (sourceUrl: string, values: Record<string, string> | null) => {
+    const r = await http.post<LoginRunResult>("/legado/login/submit", {
+      source_url: sourceUrl,
+      values,
+    });
+    return r.data;
+  },
+  /** 执行登录页按钮动作（行名或动作 JS/URL）。 */
+  legadoLoginAction: async (sourceUrl: string, key: string, longClick = false) => {
+    const r = await http.post<LoginRunResult>("/legado/login/action", {
+      source_url: sourceUrl,
+      key,
+      long_click: longClick,
+    });
+    return r.data;
+  },
+  /** 手工写入站点 Cookie（Web 模式登录；cookie 空串=清除）。 */
+  legadoLoginCookie: async (sourceUrl: string, cookie: string, url = "") => {
+    const r = await http.post<{ ok: boolean; cookie: string; domain: string }>(
+      "/legado/login/cookie",
+      { source_url: sourceUrl, cookie, url },
+    );
+    return r.data;
+  },
+  /** 清除登录头与该源域名 Cookie。 */
+  legadoLoginHeaderRemove: async (sourceUrl: string) => {
+    await http.post("/legado/login/header/remove", { source_url: sourceUrl });
+  },
+  /** 退出登录（清除登录表单数据）。 */
+  legadoLoginInfoRemove: async (sourceUrl: string) => {
+    await http.post("/legado/login/info/remove", { source_url: sourceUrl });
   },
 
   /* ------------------------------------------------------------ books */

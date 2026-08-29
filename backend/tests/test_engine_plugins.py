@@ -50,7 +50,11 @@ class TestEngineRegistry:
         assert eng.matches({"foo": 1}) is False
         assert eng.matches("nope") is False
 
-    def test_engine_only_plugin_has_no_mount_router(self):
+    def test_hybrid_plugin_has_login_router(self):
         discover_plugins(force=True)
         info = discover_plugins()["engine_legado"]
-        assert info.create_router is None
+        # 引擎 + API 混合插件：登录端点挂 /api/legado
+        assert info.mount == "legado"
+        assert callable(info.create_router)
+        assert ("legado.login", "管理书源登录（登录/退出/登录头/Cookie）") \
+            in info.permissions

@@ -46,6 +46,7 @@ async def fetch_str(analyze_url: AnalyzeUrl) -> StrResponse:
         body=spec.body,
         charset=spec.charset,
         retries=spec.retry,
+        cookie_jar=spec.cookie_jar,
     )
     if spec.web_view:
         resp.error = resp.error or "该 URL 需要 webView 渲染，服务端暂不支持"
@@ -59,7 +60,48 @@ async def fetch_str(analyze_url: AnalyzeUrl) -> StrResponse:
              "__bridge__": _StubBridge()},
         )
         resp.body = "" if ev is None else str(ev)
+    if resp.error is None:
+        await asyncio.to_thread(
+            _apply_login_check_js, analyze_url.source or {}, analyze_url, resp
+        )
     return resp
+
+
+def _apply_login_check_js(source: dict, analyze_url: AnalyzeUrl,
+                          resp: StrResponse) -> None:
+    """loginCheckJs：每次抓取后检测登录态，JS 可整体替换响应 body。
+
+    legado 把 StrResponse 对象交给 JS 并取回（``evalJS(checkJs, res)``）；
+    Python 侧引擎无法回传活对象，这里绑定 ``result = {url, body, code}``，
+    返回非空字符串/含 body 的对象时替换 resp.body —— 覆盖「未登录则
+    重取登录页」类规则的常见用法。
+    """
+    check_js = str(source.get("loginCheckJs") or "").strip()
+    if not check_js:
+        return
+    from .js_bridge import eval_js
+    from .source_bridge import SourceLoginBridge, bridges_for
+
+    result = {"url": resp.url, "body": resp.body, "code": resp.status}
+    try:
+        ev = eval_js(check_js, {
+            "result": result,
+            "baseUrl": analyze_url.base_url,
+            "source": source or None,
+            "book": analyze_url.rule_data,
+            "page": analyze_url.page,
+            "key": analyze_url.key,
+            "__bridge__": SourceLoginBridge(
+                source, base_url=analyze_url.base_url
+            ),
+            "__ns__": bridges_for(source),
+        })
+    except Exception:  # noqa: BLE001 - 检测脚本失败不影响原响应
+        return
+    if isinstance(ev, str) and ev.strip():
+        resp.body = ev
+    elif isinstance(ev, dict) and isinstance(ev.get("body"), str) and ev["body"]:
+        resp.body = ev["body"]
 
 
 class _StubBridge:
@@ -265,12 +307,14 @@ def explore_kinds(source: dict) -> list[dict]:
     low = rule_str.lower()
     if low.startswith("<js>") or low.startswith("@js:"):
         from .js_bridge import eval_js
+        from .source_bridge import bridges_for
 
         val = eval_js(
             _kind_js_body(rule_str),
             {"infoMap": {}, "source": source,
              "baseUrl": source.get("bookSourceUrl", ""),
-             "__bridge__": _StubBridge()},
+             "__bridge__": _StubBridge(),
+             "__ns__": bridges_for(source)},
         )
         rule_str = "" if val is None else str(val)
 

@@ -17,7 +17,8 @@
 | **根路径插件** | 额外 `create_root_router(ctx)` + `meta["mount_root"]` | 站点根 `/`（如 WebDAV 服务端 `/dav`） |
 | **源规则引擎插件** | `ENGINE` + `create_engine(ctx)` | 不挂路由，供 books 分发书源解析 |
 
-引擎插件和 API 插件可并存，但**引擎插件通常不需要 `mount`**（如 `engine_legado`）。
+引擎插件和 API 插件可并存（`engine_legado` 即两者兼有：引擎 +
+`/api/legado` 书源登录端点）；纯引擎插件不需要 `mount`。
 
 ---
 
@@ -217,6 +218,6 @@ def create_router(ctx: "PluginContext") -> APIRouter:
 
 ---
 
-*参照实现：`app/plugins/engine_legado/plugin.py`（引擎）、`app/plugins/webdav/plugin.py`
-（API + 根路径）、`app/plugins/books/plugin.py`（最大型 API 插件）。注册器见
-`app/plugins/registry.py`。*
+*参照实现：`app/plugins/engine_legado/plugin.py`（引擎 + 登录 API 混合）、
+`app/plugins/webdav/plugin.py`（API + 根路径）、`app/plugins/books/plugin.py`
+（最大型 API 插件）。注册器见 `app/plugins/registry.py`。*

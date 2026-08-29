@@ -329,6 +329,11 @@ class AnalyzeRule:
         return AnalyzeByJSoup(result)
 
     def _eval_bindings(self, result: Any) -> dict[str, Any]:
+        # cookie/cache/source 命名空间桥对齐 legado 的 evalJS 绑定
+        # （CookieStore / CacheManager / BaseSource）；无书源时退回
+        # JsEvaluator 内建的空 stub。
+        from .source_bridge import bridges_for
+
         return {
             "__bridge__": self.bridge,
             "cookie": {},
@@ -343,6 +348,7 @@ class AnalyzeRule:
             "nextChapterUrl": self.next_chapter_url,
             "rssArticle": None,
             "fromBookInfo": False,
+            "__ns__": bridges_for(self.source) if self.source else {},
         }
 
     def eval_js(self, js_code: str, result: Any = None) -> Any:
