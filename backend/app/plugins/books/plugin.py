@@ -380,12 +380,48 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         current=Depends(require_perm("books.explore")),
         db: AsyncSession = Depends(get_db),
     ):
-        """某书源的发现分类（由 exploreUrl 解析得到的 ExploreKind 列表）。"""
+        """某书源的发现分类（由 exploreUrl 解析得到的 ExploreKind 列表）。
+
+        ``items`` 里除了 url 型分类，还可能带 text/button/toggle/select 控件
+        （番茄书源即如此）；``values`` 是这些控件的当前值（infoMap），
+        前端用它回显 select / toggle / text。
+        """
         row = await _load_source_row(db, source_url)
         src = json.loads(row.raw_json)
         eng = _engine_for(getattr(row, "engine", None))
         kinds = await _fetch(eng.explore_kinds(src))
-        return {"items": kinds}
+        values = await _fetch(eng.explore_kind_values(src))
+        return {"items": kinds, "values": values}
+
+    class ExploreActionBody(BaseModel):
+        source_url: str
+        kind: dict = Field(default_factory=dict,
+                           description="ExploreKind 原对象（含 action/chars）")
+        value: str | None = Field(
+            default=None,
+            description="select/toggle/text 的新值；先写入 infoMap 再执行 action",
+        )
+        long_click: bool = False
+
+    @router.post("/explore/action")
+    async def explore_action_route(
+        body: ExploreActionBody,
+        current=Depends(require_perm("books.explore")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """执行发现页控件的 action（legado ExploreKindUiUseCase.executeAction）。
+
+        控件的 action 是书源 JS（番茄的下拉切换会调 jsLib 里的 z() 改配置包
+        并 refreshExplore），只能在服务端求值。返回 ``refresh`` /
+        ``openLogin`` / ``searchKey`` 三类信号供前端响应。
+        """
+        row = await _load_source_row(db, body.source_url)
+        src = json.loads(row.raw_json)
+        eng = _engine_for(getattr(row, "engine", None))
+        # action 里是同步网络 + JS 求值，放线程池避免阻塞事件循环
+        return await asyncio.to_thread(
+            eng.explore_kind_action, src, body.kind, body.value, body.long_click
+        )
 
     @router.get("/explore")
     async def explore_books_route(
@@ -1110,6 +1146,90 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         "</svg>"
     ).encode("utf-8")
 
+    # 浏览器（尤其 Windows）打不开 HEIC/HEIF，直接下发会变成下载 cover.heic。
+    _HEIC_MIME = {
+        "image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence",
+    }
+    _HEIC_BRANDS = (
+        b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis",
+        b"hevm", b"hevs", b"heif", b"mif1", b"mif2", b"msf1",
+    )
+
+    def _is_heic(content: bytes, media_type: str) -> bool:
+        if media_type.lower() in _HEIC_MIME:
+            return True
+        # ISOBMFF 容器：字节 4..8 为 'ftyp'，其后 4 字节品牌
+        head = content[:64]
+        return len(head) > 12 and head[4:8] == b"ftyp" and head[8:12] in _HEIC_BRANDS
+
+    def _byteimg_web_url(url: str) -> str | None:
+        """同一张 byteimg 原图，改用 .image 预处理引用（服务端把 HEIC 转码为
+        web 可显示格式）。无签名、不需任何转换库；非 byteimg 原图返回 None。
+        """
+        try:
+            p = urlsplit(url)
+        except ValueError:
+            return None
+        novel = "/novel-pic/"
+        idx = p.path.find(novel)
+        if idx < 0:
+            return None
+        base = p.path[idx + len(novel):].split("~", 1)[0]
+        if not base:
+            return None
+        return (f"{p.scheme}://{p.netloc}{novel}{base}"
+                f"~tplv-resize:225:300.image")
+
+    async def _webify_cover(url: str, content: bytes, media_type: str,
+                            headers: dict[str, str]) -> tuple[bytes, str]:
+        """封面若是 HEIC：先试 byteimg 智能转码；转不了再用 pillow-heif 本地解码
+        成 JPEG；全失败才回占位图（占位优于下载 .heic）。
+        """
+        if not _is_heic(content, media_type):
+            return content, media_type
+        # 1) byteimg ~.image 智能格式（带 web Accept）：偏向保留源图质量
+        web_url = _byteimg_web_url(url)
+        if web_url:
+            try:
+                wc, wm = await get_image(
+                    web_url,
+                    headers={
+                        **headers,
+                        "Accept": "image/avif,image/webp,image/jpeg,image/png",
+                    },
+                )
+                if wc and not _is_heic(wc, wm):
+                    return wc, wm
+            except Exception:  # noqa: BLE001 - 失败走本地解码兜底
+                pass
+        # 2) 本地 HEIC 解码成 JPEG（pillow-heif，可选依赖，CPU 活放到线程池）
+        loop = asyncio.get_running_loop()
+        jpg = await loop.run_in_executor(None, _heic_to_jpeg, content)
+        if jpg:
+            return jpg, "image/jpeg"
+        # 3) 全部失败 → 占位图
+        return _COVER_PLACEHOLDER, "image/svg+xml"
+
+    def _heic_to_jpeg(content: bytes) -> bytes | None:
+        """用 pillow-heif 把 HEIC 解码成 JPEG；未装 pillow-heif 或解码失败回 None。"""
+        try:
+            import pillow_heif  # noqa: PLC0415
+            pillow_heif.register_heif_opener()
+            from PIL import Image  # noqa: PLC0415
+            import io as _io  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 - 依赖缺失走占位
+            return None
+        try:
+            im = Image.open(_io.BytesIO(content))
+            im.load()
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            buf = _io.BytesIO()
+            im.save(buf, format="JPEG", quality=88)
+            return buf.getvalue()
+        except Exception:  # noqa: BLE001
+            return None
+
     @router.get("/cover")
     async def cover_proxy(url: str, token: str = ""):
         """封面/插图服务：首次下载成文件存到 data/covers/，之后直接返回本地文件。
@@ -1162,18 +1282,35 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                     except Exception:  # noqa: BLE001
                         pass
 
+        # 防盗链 Referer 优先用「归属性书源站点」而非封面机的同名域：同名域
+        # Referer 会被部分 CDN 偶发 403（封面「很少能加载」）。仍失败再不带
+        # Referer 重试一次，之后才落占位图——CDN 偶发拒绝时也能自愈。
+        try:
+            sp = urlsplit(str(ref.source_url).split(",")[0]) if ref and ref.source_url else None
+        except ValueError:
+            sp = None
         parts = urlsplit(url)
-        referer = f"{parts.scheme}://{parts.netloc}/"
+        referer = (f"{sp.scheme}://{sp.netloc}/" if sp and sp.netloc
+                   else f"{parts.scheme}://{parts.netloc}/")
+        base_headers = {"User-Agent": ua if ua else settings.default_user_agent}
         try:
             content, media_type = await get_image(
-                url,
-                headers={"User-Agent": ua if ua else settings.default_user_agent,
-                         "Referer": referer},
+                url, headers={**base_headers, "Referer": referer},
             )
-        except Exception:  # noqa: BLE001 — 上游不可达/超时都走占位图
-            return Response(content=_COVER_PLACEHOLDER, media_type="image/svg+xml")
+        except Exception:  # noqa: BLE001 — 带 Referer 失败：去 Referer 重试一次
+            try:
+                content, media_type = await get_image(url, headers=base_headers)
+            except Exception:  # noqa: BLE001 — 上游不可达/超时都走占位图
+                return Response(content=_COVER_PLACEHOLDER, media_type="image/svg+xml")
 
-        # 下载成文件存到 data/covers/
+        # 下载成文件存到 data/covers/。HEIC 先转成 web 格式（浏览器打不开 HEIC，
+        # 否则会直接下载成 cover.heic）；仍转换失败则占位，绝不把 HEIC 下发。
+        if _is_heic(content, media_type):
+            content, media_type = await _webify_cover(
+                url, content, media_type, base_headers,
+            )
+            if _is_heic(content, media_type):
+                return Response(content=_COVER_PLACEHOLDER, media_type="image/svg+xml")
         dest = covers / f"{key}{_ext_for_cover(media_type, url)}"
         dest.write_bytes(content)
         return Response(

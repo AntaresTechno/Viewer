@@ -14,7 +14,15 @@ lxml>=5.2
 cssselect>=1.2
 jsonpath-ng>=1.6
 
+# HEIC/HEIF 封面在浏览器（尤其 Windows）打不开，需要服务端解码成 JPEG 再下发。
+pillow>=10.0
+pillow-heif>=0.16
+
 # JS engine for legado rules — at least one is required for @js / {{}} rules.
-# quickjs has no CPython 3.14 wheel yet; dukpy (QuickJS-backed) works everywhere.
+# Selectable at runtime (auto / quickjs / stpyv8 / dukpy); see VIEWER_JS_ENGINE
+# and backend/app/legado_rule/js_bridge.py.
+# - quickjs has no CPython 3.14 wheel yet; dukpy (QuickJS-backed) works everywhere.
+# - stpyv8 (V8) is an optional second choice: `pip install stpyv8`.
 dukpy>=0.4 ; python_version >= "3.14"
 quickjs ; python_version < "3.14"
+# stpyv8 ;  # optional, install separately when you want the V8 backend
