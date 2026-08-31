@@ -24,7 +24,7 @@
 
 | 层 | 技术 |
 |---|---|
-| 后端 | Python ≥3.11、FastAPI、SQLAlchemy 2 (async) + aiosqlite、PyJWT、httpx、lxml/jsonpath-ng、dukpy(QuickJS) |
+| 后端 | Python ≥3.11、FastAPI、SQLAlchemy 2 (async) + aiosqlite、PyJWT、httpx、lxml/jsonpath-ng、JS 引擎 quickjs/dukpy/stpyv8 + `rhino_compat.js` |
 | 前端 | Vite 6、Vue 3.5、TypeScript、Pinia、vue-router 4、axios、miuix-vue（Miuix/MD3 双设计系统）、motion-v |
 | 存储 | 单文件 SQLite：`backend/data/viewer.db`；磁盘缓存 `backend/data/cache/img`（封面图）与本地书库表 |
 | 部署 | `npm run build` 产物由后端 SPA 挂载直接服务，单端口 `http://127.0.0.1:8000/` 即整站 |
@@ -149,7 +149,8 @@ pydantic-settings，环境变量前缀 `VIEWER_`（大写字段名），支持 `
 | `analyzer_regex.py` | 多段正则链式提取 |
 | `analyzer_xpath.py` | XPath 取值器（JsoupXpath 方言子集） |
 | `web_book.py` | 搜索/详情/目录/正文四大流程编排（对应 BookList/BookInfo/BookChapterList/BookContent.kt） |
-| `js_bridge.py` | JS 引擎桥：优先 quickjs，回退 dukpy；提供镜像 legado JsExtensions 子集的 `java` 对象 |
+| `js_bridge.py` | JS 引擎桥：quickjs / stpyv8 / dukpy 可切换（`settings.js_engine` + 运行期覆盖）；注入 `rhino_compat.js`（JavaImporter/Packages/okhttp3/hutool 兼容）；提供镜像 legado JsExtensions 子集的 `java` 对象及 `httpRequest`/`md5Encode`/`base64*` 等桥 |
+| `rhino_compat.js` | Rhino(Java) 兼容预置脚本：`JavaImporter`/`importClass`/`importPackage`/`Packages` + okhttp3/hutool/android 兼容类，修复 `JavaImporter is not defined` |
 | `net.py` | httpx 连接池 HTTP 层（keep-alive、charset 探测） |
 
 语义权威依据：`docs/spec/*.md`（从本仓库 legado Kotlin 源码整理）。

@@ -268,7 +268,7 @@ SearchBook 为搜索/发现行模型，字段与 Book 子集一致 + originOrder
 | OkHttp + CookieJar | AnalyzeUrl 全部请求；CookieStore 按域名存 cookie（数据库），enabledCookieJar 决定是否自动回写 | httpx/requests + 自实现 cookie 持久层；`CookieManager.cookieJarHeader` 标记头需保留语义 |
 | Cronet | `AppConfig.isCronet` 分支、dnsIp 自定义解析（customIp 表） | 忽略 Cronet 分支；dnsIp 可用自定义 resolver 或跳过 |
 | BackstageWebView（WebView） | urlOption `webView:true`/`webJs`、contentRule.webJs+sourceRegex、AnalyzeRule 的 `<js>` WebJs 模式 | 无法无头渲染：显式报"unsupported capability"，不可静默返空（AGENTS.md 红线） |
-| Rhino JS（`:modules:rhino`） | 一切规则 JS：searchUrl/@js/{{}}/formatJs/preUpdateJs/loginCheckJs/coverDecodeJs/imageDecode | quickjs/py-mini-racer；注意 Double 整数化输出、`String.format("%.0f")` 语义与 bindings 全集对齐 |
+| Rhino JS（`:modules:rhino`） | 一切规则 JS：searchUrl/@js/{{}}/formatJs/preUpdateJs/loginCheckJs/coverDecodeJs/imageDecode | quickjs / dukpy / stpyv8 可切换（`settings.js_engine` + 运行期覆盖）；注入 `rhino_compat.js` 提供 `JavaImporter`/`Packages`/`importClass`/`importPackage`/okhttp3/hutool 兼容；注意 Double 整数化输出、`String.format("%.0f")` 语义与 bindings 全集对齐 |
 | android.text.TextUtils / Parcelable / Room 注解 | 实体层 | 移植时丢弃；仅保留字段与默认值 |
 | Jsoup / JsoupXpath / JsonPath | AnalyzeByJSoup/XPath/JSonPath（锁定 jsoup ≤1.16.2 行为） | Python: lxml/css-select/beautifulsoup4 + jsonpath；注意 text()、ownText、`!` 排除选择器等方言差异 |
 | Glide / Media3 / ExoPlayer | 封面加载、音频 MediaItem（AnalyzeUrl 里的辅助方法） | 与抓取流程无关，可不移植 |

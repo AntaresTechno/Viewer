@@ -31,18 +31,21 @@ viewer/
 
 ## 快速开始
 
-### 后端（Python ≥3.11，已在 3.14 验证）
+### 后端（推荐 uv + Python 3.12）
+
+项目已用 `build.bat` / `start.bat` 接入 **uv**：它们会自动用 uv 创建/复用 `backend\.venv`（Python 3.12，版本首次运行由 uv 下载到 `\.cache\uv\python`）并安装依赖。手动方式：
 
 ```powershell
 cd viewer/backend
-python -m venv .venv
-.\.venv\Scripts\pip install -r requirements.txt
+uv venv --python 3.12 .venv
+uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 .\.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 - 数据库自动创建于 `backend/data/viewer.db`，并种子三个系统权限组与默认管理员：
   - **admin / view123456**（超级管理员，`*` 权限）
-- JS 规则依赖 `dukpy`（自带 QuickJS；Windows/Python 3.14 无 quickjs 官方轮子时的替代）。
+- 默认引擎为 **quickjs**（稳定）。`auto` 自动择优：quickjs > stpyv8 > dukpy。可选的 `stpyv8`（V8）因 isolate 不能跨线程、并发多 context 偶尔原生崩溃，仅作特定兼容需求用；必要时在「仪表盘 → JS 引擎」切回自动。番茄等依赖 Rhino `JavaImporter`/`Packages` 的书源已内置兼容层。
+- 书源解析失败 `ReferenceError: JavaImporter is not defined` 已修复：每次创建 JS 上下文都注入 `rhino_compat.js`（`JavaImporter`/`importClass`/`importPackage`/`Packages` + okhttp3/hutool 兼容类）。
 
 ### 前端
 
@@ -61,7 +64,7 @@ npm run dev          # 或开发模式（5173 端口代理 /api → 8000）
 
 | 脚本 | 作用 |
 | --- | --- |
-| `build.bat` | 首次运行自动创建 venv、pip 安装后端依赖、npm install，然后 vite 构建前端到 `frontend/dist` |
+| `build.bat` | 首次运行自动用 uv 创建 Python 3.12 venv、安装后端依赖，npm install + vite 构建前端到 `frontend/dist` |
 | `start.bat` | 一键启动：确保依赖与 dist 后用 uvicorn 在 **http://127.0.0.1:8000/** 服务整站并自动打开浏览器 |
 | `start.bat dev` | 开发模式：同时启动 vite 热更新（5173，/api 代理到 8000）与后端（--reload） |
 

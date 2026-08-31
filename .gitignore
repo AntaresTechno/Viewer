@@ -34,6 +34,8 @@ dist/
 .vite/
 # build.bat / start.bat 会把 npm 缓存写到仓库根目录 .cache/
 .cache/
+# pnpm 构建产物存储
+.pnpm-store/
 
 # 日志
 *.log

@@ -1,22 +1,32 @@
 @echo off
 rem ============================================================
-rem  Viewer - build script
-rem    1. ensures backend venv + requirements installed
+rem  Viewer - build script (uv + Python 3.12)
+rem    1. ensures backend venv (Python 3.12) + requirements installed
 rem    2. npm install (first run) + vite build -> frontend\dist
 rem ============================================================
 setlocal
 cd /d "%~dp0"
 
+rem project-local uv cache so no dependency on %LOCALAPPDATA%\uv
+set "UV_CACHE_DIR=%~dp0.cache\uv"
+set "UV_PYTHON_INSTALL_DIR=%UV_CACHE_DIR%\python"
+
 rem absolute paths so pushd/popd never break them
 set "PY=%~dp0backend\.venv\Scripts\python.exe"
 
+where uv >nul 2>nul
+if errorlevel 1 (
+    echo [error] uv not found in PATH. Install uv first:  pip install uv   ^(https://astral.sh/uv^)
+    goto :err
+)
+
 if not exist "%PY%" (
-    echo [setup] creating Python virtual environment ...
-    python -m venv backend\.venv || goto :err
+    echo [setup] creating Python 3.12 venv with uv ...
+    uv venv --python 3.12 backend\.venv || goto :err
 )
 
 echo [setup] installing backend dependencies ...
-"%PY%" -m pip install -q -r backend\requirements.txt
+uv pip install --python "%PY%" -r backend\requirements.txt
 if errorlevel 1 goto :err
 
 where npm >nul 2>nul

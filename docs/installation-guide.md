@@ -27,7 +27,7 @@
 
 | 层 | 技术 | 说明 |
 |---|---|---|
-| 后端 | Python ≥ 3.11（推荐 3.12–3.14）、FastAPI、SQLAlchemy 2 (async) + aiosqlite、PyJWT、httpx、lxml/jsonpath-ng、dukpy/quickjs | 入口 `app.main:app` |
+| 后端 | Python ≥ 3.11（推荐 **uv + Python 3.12**）、FastAPI、SQLAlchemy 2 (async) + aiosqlite、PyJWT、httpx、lxml/jsonpath-ng、quickjs/dukpy | 入口 `app.main:app` |
 | 前端 | Vite 6、Vue 3.5、TypeScript 5.6、Pinia、vue-router 4、axios、miuix-vue、motion-v | 包管理 npm 或 pnpm |
 | 存储 | 单文件 SQLite `backend/data/viewer.db`（自动创建） | 无需安装数据库服务 |
 
@@ -35,7 +35,8 @@
 
 | 软件 | 版本要求 | 获取地址 | 备注 |
 |---|---|---|---|
-| Python | ≥ 3.11（3.14 可用） | <https://www.python.org/downloads/> | Windows 安装时勾选 **Add python.exe to PATH** |
+| uv | ≥ 0.6 | <https://astral.sh/uv/> 或 `pip install uv` | 推荐用它创建 3.12 venv（`build.bat`/`start.bat` 自动用） |
+| Python | ≥ 3.11（推荐 3.12） | <https://www.python.org/downloads/> | Windows 安装时勾选 **Add python.exe to PATH**；`build.bat` 会自动经 uv 下载 3.12 |
 | Node.js | ≥ 20（推荐 22 LTS） | <https://nodejs.org/> | Vite 6 要求；仅跑生产模式也需它构建前端 |
 | Git | 任意较新版本 | <https://git-scm.com/> | 仅拉取代码需要，可选 |
 | pnpm | ≥ 9（可选） | `corepack enable && corepack prepare pnpm@latest --activate` | 前端仓库带 `pnpm-lock.yaml`；用 npm 也完全可以 |
@@ -47,9 +48,42 @@
 | Python 版本 | 安装的引擎 |
 |---|---|
 | 3.14 及以上 | `dukpy`（QuickJS 内核，全平台纯轮子） |
-| 3.13 及以下 | `quickjs` |
+| 3.11–3.13（推荐 3.12） | `quickjs` |
 
-无需手动干预，`pip install -r requirements.txt` 会自动处理。
+无需手动干预：`build.bat`/`start.bat` 会用 `uv pip install -r requirements.txt` 自动处理。
+推荐用 uv 固定 Python 3.12（`uv venv --python 3.12`），能在这一版本同时尝试 `quickjs`
+与可选的 `stpyv8`（V8）两种引擎。
+
+### 可选：V8 引擎 stpyv8
+
+除 QuickJS 之外，本应用支持把书源 JS 交给 **stpyv8**（内嵌 Google V8）执行，
+并在「管理 → 仪表盘 → JS 引擎」处切换。需要时手动安装（体积较大，且 3.14 暂无
+官方轮子，可用 3.11–3.13）：
+
+```powershell
+cd backend
+.\.venv\Scripts\pip install stpyv8   # 或用 uv: uv pip install --python .venv\Scripts\python.exe stpyv8
+.\.venv\Scripts\python -m uvicorn app.main:app --port 8000
+```
+
+> ⚠️ **稳定性与线程限制（请知悉）**
+> stpyv8 的 V8 isolate/context 不能跨线程共享（cloudflare/stpyv8#100），且
+> 在并发创建/销毁大量 context 的场景（如高并发书源解析、异步测试）可能出现
+> **原生崩溃对话框**（本机遇过 `内存不能为 written`）。因此**推荐默认引擎为
+> `quickjs`（稳定）**，stpyv8 仅作满足特定书源兼容性的**可选**引擎。若切换后
+> 反复出现原生崩溃，回到「仪表盘 → JS 引擎 → 自动」即可。
+
+### JS 引擎切换
+
+- 默认 `auto`：按 `quickjs > stpyv8 > dukpy` 顺序选第一个可用的。
+- 也可用环境变量固定：`VIEWER_JS_ENGINE=stpyv8`（取值 `auto|quickjs|stpyv8|dukpy`）。
+- 运行期切换：管理端仪表盘「JS 引擎」卡片选择后点「应用」，持久化到
+  `backend/data/js_engine.json`，对之后创建的书源规则生效。
+
+> 番茄等 Android 风格书源依赖 Rhino 全局（`JavaImporter` / `Packages` /
+> `importClass` / `importPackage`，以及 okhttp3 / hutool 工具类）。
+> 已在每次创建 JS 上下文时自动注入 `backend/app/legado_rule/rhino_compat.js`
+> 兼容层，因此不再报 `ReferenceError: JavaImporter is not defined`。
 
 ---
 
@@ -72,8 +106,8 @@ cd viewer
 
 自动完成：
 
-1. 不存在 `backend\.venv` 时用系统 `python` 创建虚拟环境；
-2. `pip install -r backend\requirements.txt`；
+1. `backend\.venv` 缺失时用 **uv 创建 Python 3.12 虚拟环境**（Python 3.12 首次经 `uv python install` 下载到 `\.cache\uv\python`）；
+2. `uv pip install -r backend\requirements.txt`；
 3. `frontend\node_modules` 缺失时执行 `npm install`；
 4. `npm run build` 产出 `frontend\dist`。
 
