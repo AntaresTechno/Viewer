@@ -41,6 +41,30 @@ const profile = ref({
 });
 
 const chapters = ref<Chapter[]>([]);
+/** 是否存在分卷标记；没有则目录顶部补一个「卷0」分隔。 */
+const hasVols = computed(() => chapters.value.some((c) => !!c.isVolume));
+/** 真章节总数（剔除卷分隔头）。 */
+const realTotalNum = computed(
+  () => chapters.value.filter((c) => !c.isVolume).length,
+);
+/** 章序号（跳过卷分隔头）：第 i 条里第几个真章节。 */
+function realNum(i: number): number {
+  let n = 0;
+  for (let k = 0; k <= i; k++) if (!chapters.value[k]?.isVolume) n++;
+  return n;
+}
+/** 从 i 起第一个真章节下标；其后无真章节返回 -1。 */
+function nextReal(i: number): number {
+  for (let k = i; k < chapters.value.length; k++)
+    if (!chapters.value[k]?.isVolume) return k;
+  return -1;
+}
+/** 从 i 起往前第一个真章节下标；之前无真章节返回 -1。 */
+function prevReal(i: number): number {
+  for (let k = i; k >= 0; k--)
+    if (!chapters.value[k]?.isVolume) return k;
+  return -1;
+}
 const current = ref(-1);
 const paragraphs = ref<string[]>([]);
 const loadingToc = ref(true);
@@ -260,6 +284,10 @@ async function fetchParagraphs(idx: number): Promise<string[]> {
 }
 
 async function openChapter(idx: number, restoreOffset = 0) {
+  if (chapters.value.some((c) => !!c.isVolume)) {
+    const snapped = nextReal(idx);
+    idx = snapped >= 0 ? snapped : prevReal(chapters.value.length - 1);
+  }
   if (!chapters.value[idx] || loadingContent.value) return;
   current.value = idx;
   pageIndex.value = 0;
@@ -330,11 +358,12 @@ const prevError = ref(false);
 async function loadNextSection(): Promise<void> {
   if (mode.value !== "scroll" || loadingContent.value || loadingNext.value) return;
   const last = sections.value[sections.value.length - 1];
-  if (!last || last.idx >= chapters.value.length - 1) return;
+  if (!last) return;
+  const nidx = nextReal(last.idx + 1);
+  if (nidx < 0) return;
   loadingNext.value = true;
   nextError.value = false;
   try {
-    const nidx = last.idx + 1;
     const ps = await fetchParagraphs(nidx);
     sections.value.push({ idx: nidx, title: chapters.value[nidx]?.title ?? "", paragraphs: ps });
     prefetchUpcoming(nidx);
@@ -349,14 +378,15 @@ async function loadNextSection(): Promise<void> {
 async function loadPrevSection(): Promise<void> {
   if (mode.value !== "scroll" || loadingContent.value || loadingPrev.value) return;
   const first = sections.value[0];
-  if (!first || first.idx <= 0) return;
+  if (!first) return;
+  const pidx = prevReal(first.idx - 1);
+  if (pidx < 0) return;
   loadingPrev.value = true;
   prevError.value = false;
   const el = bodyEl.value;
   const beforeH = el?.scrollHeight ?? 0;
   const beforeTop = el?.scrollTop ?? 0;
   try {
-    const pidx = first.idx - 1;
     const ps = await fetchParagraphs(pidx);
     sections.value.unshift({ idx: pidx, title: chapters.value[pidx]?.title ?? "", paragraphs: ps });
     await nextTick();
@@ -823,7 +853,7 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
     <footer v-if="!loadingToc && !tocError" class="bar bottom">
       <button class="btn" :disabled="current <= 0" @click.stop="prevChapter">上一章</button>
       <span v-if="mode === 'paged'" class="pos">{{ pageIndex + 1 }} / {{ pageCount }}</span>
-      <span v-else class="pos">{{ current + 1 }} / {{ chapters.length }}</span>
+      <span v-else class="pos">{{ realNum(Math.max(current, 0)) }} / {{ realTotalNum }}</span>
       <button
         class="btn"
         :disabled="current >= chapters.length - 1"
@@ -840,15 +870,19 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
             <button class="ib" @click="showChapters = false">✕</button>
           </div>
           <ol class="drawer-list">
-            <li v-for="(c, i) in chapters" :key="c.url + i">
-              <a
-                :class="{ cur: i === current }"
-                @click.prevent="showChapters = false; openChapter(i)"
-              >
-                <span class="num">{{ i + 1 }}</span>
-                <span class="ttl">{{ c.title || `第${i + 1}章` }}</span>
-              </a>
-            </li>
+            <li v-if="!hasVols" class="vol-sep">卷0</li>
+            <template v-for="(c, i) in chapters" :key="c.url + i">
+              <li v-if="c.isVolume" class="vol-sep">{{ c.title }}</li>
+              <li v-else>
+                <a
+                  :class="{ cur: i === current }"
+                  @click.prevent="showChapters = false; openChapter(i)"
+                >
+                  <span class="num">{{ realNum(i) }}</span>
+                  <span class="ttl">{{ c.title || `第${realNum(i)}章` }}</span>
+                </a>
+              </li>
+            </template>
           </ol>
         </aside>
       </div>
@@ -1164,11 +1198,14 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 .drawer-list {
+  columns: 2;
+  column-gap: 16px;
   overflow-y: auto;
   list-style: none; /* 自动编号与块级链接会拆成两行，改用行内序号 */
   padding: 6px 4px 16px;
   margin: 0;
 }
+.drawer-list li { break-inside: avoid; }
 .drawer-list a {
   display: flex;
   align-items: baseline;
@@ -1194,6 +1231,17 @@ const chapterTitle = computed(() => chapters.value[current.value]?.title ?? "");
 }
 .drawer-list a:hover { background: rgba(0, 0, 0, 0.05); }
 .drawer-list a.cur { color: var(--m-color-primary, #5b6ac4); font-weight: 600; }
+.drawer-list .vol-sep {
+  list-style: none;
+  margin: 8px 0 2px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--m-color-on-background-variant, #9a918e);
+  border-top: 1px solid var(--m-color-outline-variant, rgba(128, 128, 128, 0.35));
+  pointer-events: none;
+  break-inside: avoid;
+}
 .drawer-enter-active, .drawer-leave-active { transition: opacity 0.15s ease; }
 .drawer-enter-from, .drawer-leave-to { opacity: 0; }
 

@@ -8,11 +8,13 @@ import asyncio
 import html as html_mod
 import json
 import re
+import time
 from typing import Any
 
 from .analyze_rule import AnalyzeRule
 from .analyze_url import AnalyzeUrl, get_absolute_url
 from .exceptions import FetchError, RuleError
+from .explore_ui import normalize_style
 from .net import StrResponse, fetch
 
 
@@ -284,6 +286,12 @@ _KIND_SPLIT_RE = re.compile(r"(?:&&|\n)+")
 _KIND_KEYS = ("title", "url", "type", "action", "chars", "default",
               "viewName", "style")
 
+# 发现分类缓存：legado 用 aCache + exploreKindsMap 做同样的事（见
+# explore_kinds 的 docstring）。进程内即可 —— 它只是为了避免同一用户在
+# 发现页里点一次控件就重跑整页签名请求，不做跨进程共享。
+_KINDS_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_KINDS_TTL = 600.0
+
 
 def _kind_js_body(explore_url: str) -> str:
     """Extract the JS body from a <js>/@js: exploreUrl (mirrors BookSourceExtensions)."""
@@ -293,12 +301,66 @@ def _kind_js_body(explore_url: str) -> str:
     return explore_url[4:] if end <= 4 else explore_url[4:end]
 
 
+def _kind_from_obj(it: dict) -> dict:
+    """JSON 数组里的一项 → ExploreKind。
+
+    只在书源**真的给了** style 时才补全成完整 FlexChildStyle：多数书源不带
+    style，凭空补一个会塞满无意义的默认值，也给既有调用方/测试造成噪音。
+    """
+    kind = {k: it[k] for k in _KIND_KEYS if k in it}
+    kind.setdefault("type", "url")
+    if "style" in it:
+        kind["style"] = normalize_style(it["style"])
+    return kind
+
+
+def _kinds_cache_key(source: dict) -> str:
+    explore_url = source.get("exploreUrl")
+    if not isinstance(explore_url, str) or not explore_url.strip():
+        return ""
+    return f"{source.get('bookSourceUrl') or ''}::{explore_url}"
+
+
 def explore_kinds(source: dict) -> list[dict]:
     """Parse a book source's exploreUrl into its category (ExploreKind) list.
 
     Mirrors BookSourceExtensions.exploreKinds(): optional <js>/@js: to build the
     string, then JSON array or ``标题::url`` lines separated by ``&&``/newline.
+
+    结果按 (bookSourceUrl, exploreUrl) 缓存：legado 用 ``aCache`` +
+    ``exploreKindsMap`` 做同样的事（key 是 md5(sourceUrl+exploreUrl)），
+    只在 ``refreshExplore`` 时失效。番茄这类书源的动态发现页要跑十几次
+    签名请求（实测 15s+），不缓存的话每次点控件都重跑整页。
     """
+    cache_key = _kinds_cache_key(source)
+    if cache_key:
+        hit = _KINDS_CACHE.get(cache_key)
+        if hit is not None:
+            stamp, kinds = hit
+            if time.monotonic() - stamp < _KINDS_TTL:
+                return [dict(k) for k in kinds]
+
+    kinds = _explore_kinds_uncached(source)
+    if cache_key and kinds:
+        _KINDS_CACHE[cache_key] = (time.monotonic(), [dict(k) for k in kinds])
+    return kinds
+
+
+def invalidate_explore_kinds(source: dict | None = None) -> None:
+    """失效发现分类缓存（``refreshExplore`` / 书源编辑后调用）。
+
+    ``source`` 为 None 时清空全部（书源被删/改时逐条失效更麻烦，
+    且发现分类缓存本就是短期缓存）。
+    """
+    if source is None:
+        _KINDS_CACHE.clear()
+        return
+    key = _kinds_cache_key(source)
+    if key:
+        _KINDS_CACHE.pop(key, None)
+
+
+def _explore_kinds_uncached(source: dict) -> list[dict]:
     explore_url = source.get("exploreUrl")
     if not explore_url or not isinstance(explore_url, str) or not explore_url.strip():
         return []
@@ -306,15 +368,24 @@ def explore_kinds(source: dict) -> list[dict]:
     rule_str: str = explore_url.strip()
     low = rule_str.lower()
     if low.startswith("<js>") or low.startswith("@js:"):
-        from .js_bridge import eval_js
-        from .source_bridge import bridges_for
+        from .js_bridge import JavaBridge, eval_js
+        from .source_bridge import InfoMapBridge, bridges_for
 
+        ns = bridges_for(source)
+        # legado 把 InfoMap 实例绑成 `infoMap`（AnalyzeUrl.evalJS）；发现页
+        # JS 会读 infoMap['关键词：'] 并在 saveKeys(infoMap) 里调用
+        # .set()/.save()，纯 dict 会直接 TypeError。
+        ns["infoMap"] = InfoMapBridge(source)
+        # 发现页 JS 常直接 java.ajax(...) 预热榜单/分类（番茄书源即如此），
+        # 这里必须是真 JavaBridge —— 传空壳会让 java.ajax 变成 undefined。
+        base_url = str(source.get("bookSourceUrl") or "")
         val = eval_js(
             _kind_js_body(rule_str),
             {"infoMap": {}, "source": source,
-             "baseUrl": source.get("bookSourceUrl", ""),
-             "__bridge__": _StubBridge(),
-             "__ns__": bridges_for(source)},
+             "baseUrl": base_url,
+             "__bridge__": JavaBridge(owner=None, base_url=base_url,
+                                      source=source),
+             "__ns__": ns},
         )
         rule_str = "" if val is None else str(val)
 
@@ -328,9 +399,7 @@ def explore_kinds(source: dict) -> list[dict]:
         if isinstance(arr, list):
             for it in arr:
                 if isinstance(it, dict):
-                    kind = {k: it[k] for k in _KIND_KEYS if k in it}
-                    kind.setdefault("type", "url")
-                    kinds.append(kind)
+                    kinds.append(_kind_from_obj(it))
                 elif isinstance(it, str):
                     kinds.append({"title": it, "url": None, "type": "url"})
             return kinds
@@ -388,6 +457,24 @@ def _apply_book_info_rules(source: dict, book: dict, body: str,
     ar.set_content(body, base_url=url)
     rbi = _as_dict(source.get("ruleBookInfo"))
 
+    # legado 的 BookInfo 先跑 init（AnalyzeRule.getElement，可重写 result /
+    # book.bookUrl / 抛错中断），再逐字段解析。番茄书源把「短链跳转取
+    # book_id、选择详情接口、自动发书评」都放在 init 里 —— 不执行 init，
+    # 后面的字段规则拿到的是未经处理的原始响应，name 等规则会全部落空。
+    init_rule = rbi.get("init") or ""
+    if init_rule.strip():
+        try:
+            init_out = ar.get_element(init_rule)
+            if init_out is not None and not (
+                isinstance(init_out, str) and not init_out.strip()
+            ):
+                # init 可以整体替换后续字段规则所见的响应内容
+                ar.set_content(init_out, base_url=url)
+        except RuleError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - legado 也允许 init 抛错中断
+            raise RuleError(f"ruleBookInfo.init 执行失败: {exc}") from exc
+
     def gs(field: str, is_url: bool = False) -> str:
         return ar.get_string(rbi.get(field) or "", is_url=is_url) if field else ""
 
@@ -432,7 +519,14 @@ async def book_info(source: dict, book: dict) -> dict:
     res = await fetch_str(aurl)
     if res.error:
         raise FetchError(res.error, res.status)
-    return await asyncio.to_thread(_apply_book_info_rules, source, book, res.body, res.url)
+    info = await asyncio.to_thread(
+        _apply_book_info_rules, source, book, res.body, res.url)
+    # 访客封面兜底：detail API 登录门禁无 thumb_url 时改取网页 __INITIAL_STATE__
+    if not info.get("coverUrl") and _fq_domain(str(source.get("bookSourceUrl") or "")):
+        fb = await _fq_guest_cover(source, book_url)
+        if fb:
+            info["coverUrl"] = fb
+    return info
 
 
 # ----------------------------------------------------------------------- toc
@@ -485,6 +579,167 @@ def _parse_toc_page_sync(
     return page_chapters, nxt
 
 
+# ------------------------------------------------------------------- 访客降级
+# 番茄 reading API 的 详情/目录 设有登录门禁：未登录会话时返回 200 空 body
+# （0 字节），书源 chapterList 里 JSON.parse('') 会报错、正文也因拿不到
+# book_id/item_id 而空。而书源自带「访问者就能用的」网页读者接口与中转
+# content 接口。这里在主线拿到空结果/报错时自动降级到访客网页接口，让
+# 「只跑番茄真机（设备注册）」也能读到免费书的目录与正文。
+_FQ_DOMAINS = ("reading.snssdk.com", "snssdk.com", "fanqienovel.com")
+_FQ_RELAY_HOSTS = ("https://gofq.52dns.cc", "https://pyfq.52dns.cc")
+_FQ_GUEST_UA = "Mozilla/5.0 (legado) Chrome/120.0.0.0"
+# 访客降级目录里章节 url 用「裸 itemId」承载；API 重建 chapter dict 时会丢掉
+# _fq_* 标记，这里凭纯数字 url 判断是否仍要走向导 content 接口。
+_FQ_ITEM_ID_RE = re.compile(r"^\d{6,}$")
+
+
+def _fq_domain(url: str) -> bool:
+    base = str(url or "").split(",")[0]
+    return any(d in base for d in _FQ_DOMAINS)
+
+
+def _fq_book_id(url: str) -> str | None:
+    m = re.search(r"[?&]book_id=(\d{6,})", str(url or ""))
+    return m.group(1) if m else None
+
+
+def _fq_unescape_url(u: str) -> str:
+    return (u.replace("\\u002F", "/").replace("\\u002f", "/")
+             .replace("\\/", "/"))
+
+
+def _fq_replace_cover(u: str) -> str:
+    """复刻书源 jsLib 的 ``replaceCover``：把 relative/带缩略图&签名参 的
+    thumb_url 转成 ``https://p6-novel.byteimg.com/origin/...`` 原图地址。
+
+    关键点：结果不含 ``?``/``&`` 签名参数，封面请求不会被 `&` 截断导致 403/400。
+    """
+    u = (u or "").strip()
+    if not u:
+        return ""
+    if re.search(r"origin|reading", u):
+        return u
+    if u.startswith("//"):
+        u = "https:" + u
+    if u.startswith("https://"):
+        u = u[8:]
+    elif u.startswith("http://"):
+        u = u[7:]
+    arr: list[str] = u.split("/")
+    if arr:
+        arr[0] = "https://p6-novel.byteimg.com/origin"
+    return "/".join(seg.split("~")[0] for seg in arr)
+
+
+async def _fq_guest_cover(source: dict, book_url: str) -> str | None:
+    """访客详情封面：detail API 登录门禁导致 thumb_url 采不到时，从书源网页
+    的 __INITIAL_STATE__ 取 thumbUri，再用书源 replaceCover 逻辑转成无签名原图。"""
+    if not _fq_domain(str(source.get("bookSourceUrl") or "")):
+        return None
+    bid = _fq_book_id(book_url)
+    if not bid:
+        return None
+    page = await _fq_guest_fetch("https://fanqienovel.com/page/" + bid)
+    if not page:
+        return None
+    m = re.search(r'"thumbUri"\s*:\s*"([^"]+)"', page)
+    if not m:
+        return None
+    cover = _fq_replace_cover(_fq_unescape_url(m.group(1)))
+    return cover if cover.startswith("http") else None
+
+
+async def _fq_guest_fetch(url: str) -> str | None:
+    try:
+        resp = await fetch(
+            url, method="GET",
+            headers={"User-Agent": _FQ_GUEST_UA,
+                     "Referer": "https://fanqienovel.com/"},
+            charset="utf-8", cookie_jar=False,
+        )
+    except Exception:  # noqa: BLE001 - 网络异常即视为不可降级
+        return None
+    if resp.error or not (resp.body or "").strip():
+        return None
+    return resp.body
+
+
+async def _fq_guest_toc(source: dict, book: dict, toc_url: str,
+                        base_url: str) -> list[dict] | None:
+    """访客网页接口取目录。返回分卷、并序章节列表；失败/不可降级返回 None。"""
+    bid = _fq_book_id(toc_url) if _fq_domain(toc_url) else None
+    if not bid:
+        return None
+    body = await _fq_guest_fetch(
+        "https://fanqienovel.com/api/reader/directory/detail?bookId=" + bid)
+    if not body:
+        return None
+    try:
+        data = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return None
+    chv = ((data or {}).get("data") or {}).get("chapterListWithVolume") or []
+    chapters: list[dict] = []
+    for vol in chv:
+        if not isinstance(vol, list):
+            continue
+        for idx, entry in enumerate(vol):
+            title = str((entry or {}).get("title") or "").strip()
+            if not title:
+                continue
+            if idx == 0:
+                vname = str((entry or {}).get("volume_name") or "").strip()
+                if vname:
+                    chapters.append({
+                        "title": vname, "url": vname, "baseUrl": base_url,
+                        "isVolume": True, "isVip": False,
+                        "_fq_guest": True, "_fq_item_id": "",
+                    })
+            item_id = str((entry or {}).get("itemId") or "")
+            chapters.append({
+                "title": title, "url": item_id, "baseUrl": base_url,
+                "isVolume": False,
+                "isVip": bool((entry or {}).get("needPay")),
+                "_fq_guest": True, "_fq_item_id": item_id,
+            })
+    return chapters or None
+
+
+def _fq_xhtml_to_paragraphs(xhtml: str) -> str:
+    paras = re.findall(r"<p[^>]*>([\s\S]*?)</p>", xhtml)
+    if not paras:
+        body = re.sub(r"^<\?xml[^>]*\?>", "", xhtml or "").strip()
+        return re.sub(r"<[^>]+>", "", body).strip()
+    out: list[str] = []
+    for p in paras:
+        t = html_mod.unescape(re.sub(r"<[^>]+>", "", p)).strip()
+        t = re.sub(r"[\u3000\s]+", " ", t).lstrip()
+        if t:
+            out.append("\u3000\u3000" + t)
+    return "\n".join(out)
+
+
+async def _fq_guest_content(item_id: str) -> str | None:
+    """中转 content 接口正文（访问者可用）。逐中转尝试，失败返回 None。"""
+    if not item_id:
+        return None
+    for relay in _FQ_RELAY_HOSTS:
+        body = await _fq_guest_fetch(relay + "/content?item_id=" + item_id)
+        if not body:
+            continue
+        try:
+            data = json.loads(body)
+        except Exception:  # noqa: BLE001
+            continue
+        if data.get("code") != 0:
+            continue
+        cont = ((data or {}).get("data") or {}).get("content") or ""
+        text = _fq_xhtml_to_paragraphs(cont)
+        if text.strip():
+            return text
+    return None
+
+
 async def get_toc(source: dict, book: dict, toc_url: str) -> list[dict]:
     rule_toc = _as_dict(source.get("ruleToc"))
     list_rule = rule_toc.get("chapterList") or ""
@@ -501,11 +756,24 @@ async def get_toc(source: dict, book: dict, toc_url: str) -> list[dict]:
     res = await fetch_str(first)
     if res.error:
         raise FetchError(res.error, res.status)
-    page_chs, nxt = await asyncio.to_thread(
-        _parse_toc_page_sync, source, book, rule_toc, list_rule,
-        res.url, res.body, res.url, True,
-    )
+    try:
+        page_chs, nxt = await asyncio.to_thread(
+            _parse_toc_page_sync, source, book, rule_toc, list_rule,
+            res.url, res.body, res.url, True,
+        )
+    except Exception:  # noqa: BLE001 - 登录门禁的空 body 会让 JSON.parse 抛错
+        page_chs, nxt = [], []
     chapters.extend(page_chs)
+
+    # 番茄 reading API 详情/目录登录门禁时，自动降级到访客网页接口
+    if not chapters and _fq_domain(toc_url):
+        guest = await _fq_guest_toc(source, book, res.url or toc_url, res.url or toc_url)
+        if guest:
+            for i, ch in enumerate(guest):
+                ch["index"] = i
+            return guest
+    if not chapters:
+        raise RuleError("章节列表为空")
 
     guard = 0
     while nxt:
@@ -574,6 +842,24 @@ async def get_toc(source: dict, book: dict, toc_url: str) -> list[dict]:
 async def get_content(source: dict, book: dict, chapter: dict,
                       next_chapter_url: str | None = None,
                       base_url: str | None = None) -> str:
+    # 分卷标题没有正文；点了分卷头（如「第一卷：初到提瓦特」）直接返回空，
+    # 避免把分卷名当 URL 去抓而 502。
+    if chapter.get("isVolume"):
+        return ""
+    # 访客降级章节：正文直接走可用的中转 content 接口（免登录）。
+    # 书源 content JS 自带 `let result`，与引擎注入的 result 绑定冲突，必须
+    # 在跑 JS 前拦下；API 重建 chapter 丢了 _fq_* 标记，用裸 itemId url 兜底。
+    ch_url = str(chapter.get("url") or "")
+    is_fq_guest = bool(chapter.get("_fq_guest")) or (
+        _fq_domain(str(source.get("bookSourceUrl") or ""))
+        and bool(_FQ_ITEM_ID_RE.match(ch_url))
+    )
+    if is_fq_guest:
+        item_id = str(chapter.get("_fq_item_id") or ch_url)
+        text = await _fq_guest_content(item_id)
+        if not text:
+            raise RuleError("内容为空")
+        return text
     rule_content = _as_dict(source.get("ruleContent"))
     chapter_url = chapter.get("url") or ""
     # chapter urls may be relative; resolve against the toc page they came from

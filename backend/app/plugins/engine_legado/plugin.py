@@ -64,9 +64,35 @@ class LegadoEngine:
         return await web_book.search_book(src, key, max(1, page))
 
     async def explore_kinds(self, src: dict) -> list[dict]:
+        """发现分类（exploreUrl 解析）。预热 JS 常内嵌同步 java.ajax
+        （番茄书源会跑十几次签名请求），放到线程池执行，避免拖垮事件循环。"""
+        import asyncio
+
         from ...legado_rule import web_book
 
-        return web_book.explore_kinds(src)
+        return await asyncio.to_thread(web_book.explore_kinds, src)
+
+    async def explore_kind_values(self, src: dict) -> dict:
+        """发现页控件（text/select/toggle）的当前值（infoMap）。"""
+        from ...legado_rule import explore_ui
+
+        return explore_ui.current_values(src)
+
+    def explore_kind_action(self, src: dict, kind: dict,
+                            value: str | None = None,
+                            long_click: bool = False) -> dict:
+        """执行发现页控件的 action（legado executeAction 语义）。
+
+        同步（JS 求值 + 网络），由路由放进线程池。动作请求重建发现页时
+        顺带失效分类缓存，让前端随后的重拉拿到新按钮集合。
+        """
+        from ...legado_rule import explore_ui, web_book
+
+        out = explore_ui.run_kind_action(
+            src, kind, value=value, long_click=long_click)
+        if out.get("refresh"):
+            web_book.invalidate_explore_kinds(src)
+        return out
 
     async def explore_book(self, src: dict, url: str, page: int = 1) -> list[dict]:
         from ...legado_rule import web_book

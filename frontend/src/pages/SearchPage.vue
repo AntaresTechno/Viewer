@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { MiuixButton, MiuixProgressIndicator } from "miuix-vue";
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import type { BookResult, SourceRow } from "@/api/client";
@@ -10,6 +10,7 @@ import { collectGroups, splitGroups } from "@/utils/sourceGroups";
 import { openDetail } from "@/utils/reader";
 
 const router = useRouter();
+const route = useRoute();
 
 const key = ref("");
 const sources = ref<SourceRow[]>([]);
@@ -21,7 +22,10 @@ const errors = ref<{ message: string; originName?: string }[]>([]);
 const searching = ref(false);
 const searchedKey = ref("");
 
+/** 发现页控件的「搜索」按钮会 push /search?q=关键词，这里接住并自动搜。 */
 onMounted(async () => {
+  const q = route.query.q;
+  if (typeof q === "string" && q.trim()) key.value = q.trim();
   try {
     const r = await api.sourcesList();
     sources.value = r.items.filter((s) => s.enabled);
@@ -29,7 +33,20 @@ onMounted(async () => {
   } catch (e) {
     alert(errMsg(e));
   }
+  // 书源列表就绪后再发起（doSearch 依赖它算范围；空列表=搜全部，也能搜）
+  if (key.value.trim()) await doSearch();
 });
+
+// 已在本页时再次收到 ?q=（发现页又点了一次搜索按钮）
+watch(
+  () => route.query.q,
+  (q) => {
+    if (typeof q === "string" && q.trim() && q !== searchedKey.value) {
+      key.value = q.trim();
+      void doSearch();
+    }
+  },
+);
 
 const groups = computed(() => collectGroups(sources.value));
 

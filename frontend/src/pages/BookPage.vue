@@ -42,6 +42,14 @@ interface BookResultShaped {
   tocUrl: string;
 }
 const chapters = ref<Chapter[]>([]);
+/** 是否存在分卷标记；没有则目录顶部补一个「卷0」分隔。 */
+const hasVols = computed(() => chapters.value.some((c) => !!c.isVolume));
+/** 章序号（跳过卷分隔头）：第 i 条里第几个真章节。 */
+function realNum(i: number): number {
+  let n = 0;
+  for (let k = 0; k <= i; k++) if (!chapters.value[k]?.isVolume) n++;
+  return n;
+}
 const tocCached = ref(false);
 
 /* shelf / toc-queue state */
@@ -465,12 +473,16 @@ async function downloadToLibrary() {
           <div class="skel-row skel-short"></div>
         </div>
         <ol v-else class="toc-list">
-          <li v-for="(c, i) in chapters" :key="c.url + i">
-            <a @click.prevent="readFrom(i)">
-              <span class="num">{{ i + 1 }}</span>
-              <span class="ttl">{{ c.title || `第${i + 1}章` }}</span>
-            </a>
-          </li>
+          <li v-if="!hasVols" class="vol-sep">卷0</li>
+          <template v-for="(c, i) in chapters" :key="c.url + i">
+            <li v-if="c.isVolume" class="vol-sep">{{ c.title }}</li>
+            <li v-else>
+              <a @click.prevent="readFrom(i)">
+                <span class="num">{{ realNum(i) }}</span>
+                <span class="ttl">{{ c.title || `第${realNum(i)}章` }}</span>
+              </a>
+            </li>
+          </template>
         </ol>
         <div v-if="!loadingToc && !chapters.length" class="center empty">
           <template v-if="tocStatus?.status === 'queued' || tocStatus?.status === 'running'">
@@ -748,6 +760,17 @@ async function downloadToLibrary() {
 }
 .toc-list a:hover {
   background: var(--m-color-surface-container-high);
+}
+.toc-list .vol-sep {
+  list-style: none;
+  margin: 10px 0 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--m-color-on-background-variant);
+  border-top: 1px solid var(--m-color-outline-variant, rgba(128, 128, 128, 0.35));
+  text-align: left;
+  grid-column: 1 / -1;
 }
 @media (max-width: 720px) {
   .toc-list {
