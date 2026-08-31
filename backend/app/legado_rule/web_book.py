@@ -27,6 +27,21 @@ load_builtin()
 _LOG = logging.getLogger("viewer.legado.web_book")
 
 
+def _cookie_state(url: str) -> str:
+    """该域名当前是否已存 Cookie（登录态）——仅用于空响应时区分"没登录"与"被拒"。
+
+    只在 WARNING 分支调用，且读取失败不影响主流程。不点名任何具体键名，
+    对任何书源都只是"有没有 Cookie"这一层信息。
+    """
+    try:
+        from . import source_state
+
+        ck = source_state.get_cookie(url) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+    return f" | cookie={'有' if ck.strip() else '空'}"
+
+
 def _log_list_response(source: dict, res: StrResponse, *, kind: str) -> None:
     """请求级日志：最终 URL / HTTP 状态 / 响应长度，空响应高亮为 WARNING。
 
@@ -43,14 +58,15 @@ def _log_list_response(source: dict, res: StrResponse, *, kind: str) -> None:
                    kind, name, res.status, size, res.url)
         return
     # 空/纯空白：WARNING（未配置 handler 时也会经 lastResort 输出到 stderr）
-    # 响应头里常有风控/限流线索（content-length、x-tt-logid 等），一并附上。
+    # 响应头里常有风控/限流线索（content-length、x-tt-logid 等），一并附上；
+    # 同时标注该域名是否已存登录态，用于区分"没登录"与"已登录但被拒"。
     hdrs = res.headers or {}
     summary = "; ".join(f"{k}={v}" for k, v in list(hdrs.items())[:12])
     head_txt = f" | 响应头: {summary[:600]}" if summary else ""
     _LOG.warning(
         "[books] %s 响应为空: source=%s status=%s bytes=%d url=%s "
-        "-> 空 body 无法解析，已短路为空列表%s",
-        kind, name, res.status, size, res.url, head_txt)
+        "-> 空 body 无法解析，已短路为空列表%s%s",
+        kind, name, res.status, size, res.url, head_txt, _cookie_state(res.url))
 
 
 def _as_dict(value: Any) -> dict:
