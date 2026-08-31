@@ -152,6 +152,8 @@ pydantic-settings，环境变量前缀 `VIEWER_`（大写字段名），支持 `
 | `js_bridge.py` | JS 引擎桥：quickjs / stpyv8 / dukpy 可切换（`settings.js_engine` + 运行期覆盖）；注入 `rhino_compat.js`（JavaImporter/Packages/okhttp3/hutool 兼容）；提供镜像 legado JsExtensions 子集的 `java` 对象及 `httpRequest`/`md5Encode`/`base64*` 等桥 |
 | `rhino_compat.js` | Rhino(Java) 兼容预置脚本：`JavaImporter`/`importClass`/`importPackage`/`Packages` + okhttp3/hutool/android 兼容类，修复 `JavaImporter is not defined` |
 | `net.py` | httpx 连接池 HTTP 层（keep-alive、charset 探测） |
+| `source_degradation/` | 源能力适配器层：引擎核心保持「读规则→执行规则」，对真实书源需要的备用读取路径（如登录门禁源的访客降级）以 `GuestReadAdapter` hook 表达，按域自注册（默认番茄）。引擎主流程只问 `guest_reader_for(source)`，不 import 任何书源专用模块。详见 `docs/decouple-fanqie.md` |
+| `source_state.py` | 每个源持久状态：登录信息/Header/Cookie(按 eTLD+1)/source 变量/缓存；跨域 `sessionid` 镜像改由 `settings.session_sso_groups` 分组配置驱动（书源 `extra.sessionSsoGroup` 可覆盖/关闭） |
 
 语义权威依据：`docs/spec/*.md`（从本仓库 legado Kotlin 源码整理）。
 

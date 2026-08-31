@@ -46,14 +46,45 @@ _EMPTY: dict = {
 }
 
 
-# 番茄/头条的账号会话是「跨域单点登录」：同一个 sessionid 同时下发到
-# fanqienovel.com 与 snssdk.com。书源分别从 fanqienovel.com 读 sessionid
-# 拼 ck（搜索/详情走 URL），又要求 java.ajax 在 snssdk.com 挂上 sessionid
-# Cookie（目录/正文走 Cookie）。若只存到其中一个 eTLD+1，登录态就「局部
-# 生存」——发现页只靠设备签名能过，目录/正文/搜索却因另一域名读不到
-# sessionid 而拿到空 body。故把这两个 SSO 域名的 sessionid 保持镜像，
-# 一份登录态全局可用。
-_FQ_SESSION_DOMAINS = ("snssdk.com", "fanqienovel.com")
+# 跨域单点登录：某些账号体系把同一个 `sessionid` 同时下发到一组兄弟域名（例如
+# 番茄/头条系的 fanqienovel.com 与 snssdk.com）。书源可能从 A 域名拼 ck、又要求
+# java.ajax 在 B 域名挂上同样的会话 Cookie；若只存到其中一个 eTLD+1，登录态就
+# 「局部生存」。这里按配置声明的「域名分组」把 sessionid 镜像到组内兄弟域名。
+# 分组默认由 settings.session_sso_groups 提供，书源可用 extra.sessionSsoGroup 覆盖/关闭。
+
+def _config_groups() -> list[frozenset[str]]:
+    """SSO domain groups declared in settings (empty -> mirroring disabled)."""
+    try:
+        from ..core.config import settings
+
+        raw = getattr(settings, "session_sso_groups", None) or []
+    except Exception:  # noqa: BLE001
+        return []
+    groups: list[frozenset[str]] = []
+    for grp in raw:
+        if isinstance(grp, list):
+            doms = {str(d).strip() for d in grp if str(d).strip()}
+            if doms:
+                groups.append(frozenset(doms))
+    return groups
+
+
+def groups_for_source(source: dict | None) -> list[frozenset[str]] | None:
+    """SSO groups to apply for a source: per-source override > config default.
+
+    ``None`` means mirroring is disabled for this source (when
+    ``extra.sessionSsoGroup`` is None/False/[]).
+    """
+    if isinstance(source, dict):
+        extra = source.get("extra")
+        if isinstance(extra, dict) and "sessionSsoGroup" in extra:
+            val = extra["sessionSsoGroup"]
+            if val in (None, False, []):
+                return None
+            if isinstance(val, list):
+                doms = {str(d).strip() for d in val if str(d).strip()}
+                return [frozenset(doms)] if doms else None
+    return _config_groups()
 
 
 # --------------------------------------------------------------------- io
@@ -126,28 +157,33 @@ def get_cookie(url: str) -> str:
         return str(_load()["cookies"].get(domain, ""))
 
 
-def _session_targets(domain: str, cmap: dict) -> set[str]:
-    """写入目标域名集合：本域名 + （含 sessionid 时）同域番茄/头条 SSO 镜像。
+def _session_targets(domain: str, cmap: dict, groups: list[frozenset[str]]) -> set[str]:
+    """写入目标域名集合：本域名 + （含 sessionid 时）同组 SSO 兄弟域名。
 
-    只有写入的 cookie 里带 ``sessionid`` 且落在 SSO 域名上才会扩散到兄弟域
-    （fanqienovel.com <-> snssdk.com）；其它情况只写本域名，行为不变。
+    只有写入的 cookie 里带 ``sessionid`` 且域名落在某个 SSO 分组里，才会扩散
+    到该组兄弟域名；其它情况只写本域名，行为不变。
     """
     targets: set[str] = {domain}
-    if "sessionid" in cmap and domain in _FQ_SESSION_DOMAINS:
-        targets.update(_FQ_SESSION_DOMAINS)
+    if "sessionid" in cmap and groups:
+        for g in groups:
+            if domain in g:
+                targets.update(g)
+                break
     return targets
 
 
-def set_cookie(url: str, cookie: str) -> None:
+def set_cookie(url: str, cookie: str, *, groups: list[frozenset[str]] | None = None) -> None:
     """整体覆盖该域名的 Cookie（CookieStore.setCookie 语义）。
 
-    sessionid 会自动镜像到番茄/头条 SSO 兄弟域名，保证一份登录态全局可用。
+    带 ``sessionid`` 时会按 SSO 分组镜像到兄弟域名，保证一份登录态全局可用。
+    ``groups`` 缺省用配置默认值；传入空列表即关闭镜像。
     """
     domain = subdomain(url)
     if not domain:
         return
+    groups = _config_groups() if groups is None else groups
     cmap = cookie_to_map(cookie) if str(cookie or "").strip() else {}
-    targets = _session_targets(domain, cmap)
+    targets = _session_targets(domain, cmap, groups)
 
     def _set(data: dict) -> None:
         if not cmap:
@@ -166,18 +202,22 @@ def set_cookie(url: str, cookie: str) -> None:
     _mutate(_set)
 
 
-def replace_cookie(url: str, cookie: str) -> None:
+def replace_cookie(
+    url: str, cookie: str, *, groups: list[frozenset[str]] | None = None
+) -> None:
     """合并写入：新旧 Cookie 逐项 merge，新值覆盖旧值。
 
-    sessionid 会自动镜像到番茄/头条 SSO 兄弟域名，保证一份登录态全局可用。
+    带 ``sessionid`` 时会按 SSO 分组镜像到兄弟域名。``groups`` 缺省用配置
+    默认值；传入空列表即关闭镜像。
     """
     if not str(cookie or "").strip():
         return
     domain = subdomain(url)
     if not domain:
         return
+    groups = _config_groups() if groups is None else groups
     cmap = cookie_to_map(cookie)
-    targets = _session_targets(domain, cmap)
+    targets = _session_targets(domain, cmap, groups)
     with _LOCK:
         data = _load()
         for dom in targets:
@@ -189,25 +229,34 @@ def replace_cookie(url: str, cookie: str) -> None:
         _save(data)
 
 
-def ensure_session_global(tok: str = "") -> None:
-    """把番茄账号 session 镜像到全部 SSO 域名。
+def ensure_session_global(
+    tok: str = "", groups: list[frozenset[str]] | None = None
+) -> None:
+    """把账号 session 镜像到全部 SSO 分组域名。
 
-    主要给登录流用：书源 ``[账号登录]``（login_()）用 ``token：`` 表单值或
-    已有 cookie 拼出 ``sessionid=…``。此后目录/正文（走 snssdk.com Cookie）
-    与搜索/详情（走 fanqienovel.com 的 ck）都能拿到同一份登录态。
+    主要给登录流用：书源 ``[账号登录]``（login()）用 ``token：`` 表单值或已有
+    cookie 拼出 ``sessionid=…``。此后走不同域名（Cookie vs URL ck）的目录/正文、
+    搜索/详情都能拿到同一份登录态。``groups`` 缺省用配置默认值；传入空列表关闭。
     """
+    groups = _config_groups() if groups is None else groups
+    if not groups:
+        return
     val = str(tok or "").strip()
     if not val:
         with _LOCK:
             data = _load()
-            for dom in _FQ_SESSION_DOMAINS:
-                m = cookie_to_map(str(data["cookies"].get(dom, "")))
-                if m.get("sessionid"):
-                    val = m["sessionid"]
+            for g in groups:
+                for dom in g:
+                    m = cookie_to_map(str(data["cookies"].get(dom, "")))
+                    if m.get("sessionid"):
+                        val = m["sessionid"]
+                        break
+                if val:
                     break
     if not val:
         return
-    replace_cookie("https://fanqienovel.com", f"sessionid={val}")
+    anchor = next(iter(sorted(groups[0])))
+    replace_cookie(f"https://{anchor}", f"sessionid={val}", groups=groups)
 
 
 def remove_cookie(url: str) -> None:

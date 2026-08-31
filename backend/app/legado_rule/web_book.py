@@ -16,6 +16,12 @@ from .analyze_url import AnalyzeUrl, get_absolute_url
 from .exceptions import FetchError, RuleError
 from .explore_ui import normalize_style
 from .net import StrResponse, fetch
+from .source_degradation import guest_reader_for, load_builtin
+
+# Import/register bundled source-capability adapters (e.g. guest-read fallback).
+# The engine core only asks "is there an adapter for this source?" and never
+# branches on concrete book-source domains.
+load_builtin()
 
 
 def _as_dict(value: Any) -> dict:
@@ -521,9 +527,10 @@ async def book_info(source: dict, book: dict) -> dict:
         raise FetchError(res.error, res.status)
     info = await asyncio.to_thread(
         _apply_book_info_rules, source, book, res.body, res.url)
-    # 访客封面兜底：detail API 登录门禁无 thumb_url 时改取网页 __INITIAL_STATE__
-    if not info.get("coverUrl") and _fq_domain(str(source.get("bookSourceUrl") or "")):
-        fb = await _fq_guest_cover(source, book_url)
+    # 访客封面兜底：detail API 登录门禁无 thumb_url 时，交给本源适配器
+    ad = guest_reader_for(source)
+    if not info.get("coverUrl") and ad is not None:
+        fb = await ad.guest_cover(source, book_url)
         if fb:
             info["coverUrl"] = fb
     return info
@@ -579,167 +586,6 @@ def _parse_toc_page_sync(
     return page_chapters, nxt
 
 
-# ------------------------------------------------------------------- 访客降级
-# 番茄 reading API 的 详情/目录 设有登录门禁：未登录会话时返回 200 空 body
-# （0 字节），书源 chapterList 里 JSON.parse('') 会报错、正文也因拿不到
-# book_id/item_id 而空。而书源自带「访问者就能用的」网页读者接口与中转
-# content 接口。这里在主线拿到空结果/报错时自动降级到访客网页接口，让
-# 「只跑番茄真机（设备注册）」也能读到免费书的目录与正文。
-_FQ_DOMAINS = ("reading.snssdk.com", "snssdk.com", "fanqienovel.com")
-_FQ_RELAY_HOSTS = ("https://gofq.52dns.cc", "https://pyfq.52dns.cc")
-_FQ_GUEST_UA = "Mozilla/5.0 (legado) Chrome/120.0.0.0"
-# 访客降级目录里章节 url 用「裸 itemId」承载；API 重建 chapter dict 时会丢掉
-# _fq_* 标记，这里凭纯数字 url 判断是否仍要走向导 content 接口。
-_FQ_ITEM_ID_RE = re.compile(r"^\d{6,}$")
-
-
-def _fq_domain(url: str) -> bool:
-    base = str(url or "").split(",")[0]
-    return any(d in base for d in _FQ_DOMAINS)
-
-
-def _fq_book_id(url: str) -> str | None:
-    m = re.search(r"[?&]book_id=(\d{6,})", str(url or ""))
-    return m.group(1) if m else None
-
-
-def _fq_unescape_url(u: str) -> str:
-    return (u.replace("\\u002F", "/").replace("\\u002f", "/")
-             .replace("\\/", "/"))
-
-
-def _fq_replace_cover(u: str) -> str:
-    """复刻书源 jsLib 的 ``replaceCover``：把 relative/带缩略图&签名参 的
-    thumb_url 转成 ``https://p6-novel.byteimg.com/origin/...`` 原图地址。
-
-    关键点：结果不含 ``?``/``&`` 签名参数，封面请求不会被 `&` 截断导致 403/400。
-    """
-    u = (u or "").strip()
-    if not u:
-        return ""
-    if re.search(r"origin|reading", u):
-        return u
-    if u.startswith("//"):
-        u = "https:" + u
-    if u.startswith("https://"):
-        u = u[8:]
-    elif u.startswith("http://"):
-        u = u[7:]
-    arr: list[str] = u.split("/")
-    if arr:
-        arr[0] = "https://p6-novel.byteimg.com/origin"
-    return "/".join(seg.split("~")[0] for seg in arr)
-
-
-async def _fq_guest_cover(source: dict, book_url: str) -> str | None:
-    """访客详情封面：detail API 登录门禁导致 thumb_url 采不到时，从书源网页
-    的 __INITIAL_STATE__ 取 thumbUri，再用书源 replaceCover 逻辑转成无签名原图。"""
-    if not _fq_domain(str(source.get("bookSourceUrl") or "")):
-        return None
-    bid = _fq_book_id(book_url)
-    if not bid:
-        return None
-    page = await _fq_guest_fetch("https://fanqienovel.com/page/" + bid)
-    if not page:
-        return None
-    m = re.search(r'"thumbUri"\s*:\s*"([^"]+)"', page)
-    if not m:
-        return None
-    cover = _fq_replace_cover(_fq_unescape_url(m.group(1)))
-    return cover if cover.startswith("http") else None
-
-
-async def _fq_guest_fetch(url: str) -> str | None:
-    try:
-        resp = await fetch(
-            url, method="GET",
-            headers={"User-Agent": _FQ_GUEST_UA,
-                     "Referer": "https://fanqienovel.com/"},
-            charset="utf-8", cookie_jar=False,
-        )
-    except Exception:  # noqa: BLE001 - 网络异常即视为不可降级
-        return None
-    if resp.error or not (resp.body or "").strip():
-        return None
-    return resp.body
-
-
-async def _fq_guest_toc(source: dict, book: dict, toc_url: str,
-                        base_url: str) -> list[dict] | None:
-    """访客网页接口取目录。返回分卷、并序章节列表；失败/不可降级返回 None。"""
-    bid = _fq_book_id(toc_url) if _fq_domain(toc_url) else None
-    if not bid:
-        return None
-    body = await _fq_guest_fetch(
-        "https://fanqienovel.com/api/reader/directory/detail?bookId=" + bid)
-    if not body:
-        return None
-    try:
-        data = json.loads(body)
-    except Exception:  # noqa: BLE001
-        return None
-    chv = ((data or {}).get("data") or {}).get("chapterListWithVolume") or []
-    chapters: list[dict] = []
-    for vol in chv:
-        if not isinstance(vol, list):
-            continue
-        for idx, entry in enumerate(vol):
-            title = str((entry or {}).get("title") or "").strip()
-            if not title:
-                continue
-            if idx == 0:
-                vname = str((entry or {}).get("volume_name") or "").strip()
-                if vname:
-                    chapters.append({
-                        "title": vname, "url": vname, "baseUrl": base_url,
-                        "isVolume": True, "isVip": False,
-                        "_fq_guest": True, "_fq_item_id": "",
-                    })
-            item_id = str((entry or {}).get("itemId") or "")
-            chapters.append({
-                "title": title, "url": item_id, "baseUrl": base_url,
-                "isVolume": False,
-                "isVip": bool((entry or {}).get("needPay")),
-                "_fq_guest": True, "_fq_item_id": item_id,
-            })
-    return chapters or None
-
-
-def _fq_xhtml_to_paragraphs(xhtml: str) -> str:
-    paras = re.findall(r"<p[^>]*>([\s\S]*?)</p>", xhtml)
-    if not paras:
-        body = re.sub(r"^<\?xml[^>]*\?>", "", xhtml or "").strip()
-        return re.sub(r"<[^>]+>", "", body).strip()
-    out: list[str] = []
-    for p in paras:
-        t = html_mod.unescape(re.sub(r"<[^>]+>", "", p)).strip()
-        t = re.sub(r"[\u3000\s]+", " ", t).lstrip()
-        if t:
-            out.append("\u3000\u3000" + t)
-    return "\n".join(out)
-
-
-async def _fq_guest_content(item_id: str) -> str | None:
-    """中转 content 接口正文（访问者可用）。逐中转尝试，失败返回 None。"""
-    if not item_id:
-        return None
-    for relay in _FQ_RELAY_HOSTS:
-        body = await _fq_guest_fetch(relay + "/content?item_id=" + item_id)
-        if not body:
-            continue
-        try:
-            data = json.loads(body)
-        except Exception:  # noqa: BLE001
-            continue
-        if data.get("code") != 0:
-            continue
-        cont = ((data or {}).get("data") or {}).get("content") or ""
-        text = _fq_xhtml_to_paragraphs(cont)
-        if text.strip():
-            return text
-    return None
-
-
 async def get_toc(source: dict, book: dict, toc_url: str) -> list[dict]:
     rule_toc = _as_dict(source.get("ruleToc"))
     list_rule = rule_toc.get("chapterList") or ""
@@ -765,9 +611,11 @@ async def get_toc(source: dict, book: dict, toc_url: str) -> list[dict]:
         page_chs, nxt = [], []
     chapters.extend(page_chs)
 
-    # 番茄 reading API 详情/目录登录门禁时，自动降级到访客网页接口
-    if not chapters and _fq_domain(toc_url):
-        guest = await _fq_guest_toc(source, book, res.url or toc_url, res.url or toc_url)
+    # 本源适配器提供的访客降级（如登录门禁的详情/目录）在主线拿空时兜底
+    ad = guest_reader_for(source)
+    if not chapters and ad is not None:
+        guest = await ad.guest_toc(source, book, res.url or toc_url,
+                                   res.url or toc_url)
         if guest:
             for i, ch in enumerate(guest):
                 ch["index"] = i
@@ -846,17 +694,12 @@ async def get_content(source: dict, book: dict, chapter: dict,
     # 避免把分卷名当 URL 去抓而 502。
     if chapter.get("isVolume"):
         return ""
-    # 访客降级章节：正文直接走可用的中转 content 接口（免登录）。
-    # 书源 content JS 自带 `let result`，与引擎注入的 result 绑定冲突，必须
-    # 在跑 JS 前拦下；API 重建 chapter 丢了 _fq_* 标记，用裸 itemId url 兜底。
+    # 本源适配器产出的访客章节：正文直接走备用读取路径（免登录）。
+    # 须在跑 JS 前拦下（书源 content JS 自带 `let result` 与引擎注入绑定冲突）。
     ch_url = str(chapter.get("url") or "")
-    is_fq_guest = bool(chapter.get("_fq_guest")) or (
-        _fq_domain(str(source.get("bookSourceUrl") or ""))
-        and bool(_FQ_ITEM_ID_RE.match(ch_url))
-    )
-    if is_fq_guest:
-        item_id = str(chapter.get("_fq_item_id") or ch_url)
-        text = await _fq_guest_content(item_id)
+    ad = guest_reader_for(source)
+    if ad is not None and ad.is_guest_chapter(source, chapter, ch_url):
+        text = await ad.guest_content(source, chapter)
         if not text:
             raise RuleError("内容为空")
         return text

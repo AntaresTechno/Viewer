@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     # 也可显式指定 quickjs / stpyv8 / dukpy 之一，优先于运行期 UI 覆盖。
     js_engine: str = "auto"
 
+    # ---- 跨域单点登录会话镜像 ----
+    # 某些账号体系把同一个会话 Cookie（默认 key: sessionid）同时下发到多个域名
+    # （如「番茄/头条系」的 fanqienovel.com 与 snssdk.com）。此处用「域名分组」
+    # 声明：写任一组成员域名的 sessionid 时自动镜像到组内兄弟域名，一份登录态
+    # 全局可用。可再加分组覆盖其它同源的跨域 SSO；清空（[]）即关闭该行为。
+    # 书源还可通过 extra.sessionSsoGroup 对该源单独覆盖/关闭。
+    session_sso_groups: list[list[str]] = [
+        ["snssdk.com", "fanqienovel.com"],
+    ]
+
     # ---- 并发控制（"可调线程"） ----
     parser_concurrency: int = 4        # 解析器目录/正文多页并行的最大并发请求数
     search_concurrency: int = 6        # 跨源搜索同时请求的书源数

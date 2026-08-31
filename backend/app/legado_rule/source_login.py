@@ -216,7 +216,8 @@ def run_login(source: dict) -> dict:
         source_state.put_login_info(source_key(source), login_info)
     _tok = str(login_info.get("token：") or "").strip()
     if _tok:
-        source_state.ensure_session_global(_tok)
+        source_state.ensure_session_global(
+            _tok, groups=source_state.groups_for_source(source))
     return {"ok": True, "error": None, "log": log, "values": dict(login_info)}
 
 
@@ -268,10 +269,11 @@ def run_action(source: dict, key: str, long_click: bool = False) -> dict:
         return {"openUrl": None, "values": dict(login_info),
                 "rebuild": rebuild["flag"], "error": str(exc), "log": log}
     source_state.put_login_info(source_key(source), login_info)
-    # 书源 [账号登录] 用 token：/cookie 拼 sessionid；把这份登录态镜像到番茄
-    # 全部 SSO 域名，目录/正文/搜索才能全局用到（从局部走向全局）。
+    # 书源 [账号登录] 用 token：/cookie 拼 sessionid；按本源 SSO 分组把登录态
+    # 镜像到全部域（从局部走向全局，各域目录/正文/搜索都能用）。
     _tok = str(login_info.get("token：") or "").strip()
     if _tok:
-        source_state.ensure_session_global(_tok)
+        source_state.ensure_session_global(
+            _tok, groups=source_state.groups_for_source(source))
     return {"openUrl": None, "values": dict(login_info),
             "rebuild": rebuild["flag"], "error": None, "log": log}
