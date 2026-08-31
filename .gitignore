@@ -63,6 +63,8 @@ $RECYCLE.BIN/
 *.bak
 *.orig
 *~
+.tmp-*/
+backend/.tmp*/
 
 # 下载的书籍源配置文件
 3f067eb2.json

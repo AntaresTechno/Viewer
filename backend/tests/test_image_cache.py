@@ -78,6 +78,23 @@ class TestGetImage:
         assert len(calls) == 1
         assert all(r[0] == results[0][0] for r in results)
 
+    def test_failure_does_not_warn_never_retrieved(self, cache_dir, capsys):
+        """A download failure must not log 'Future exception was never retrieved'
+        even though no concurrent request ever awaited the single-flight future."""
+        f = _fetcher(calls := [])
+        for _ in range(3):  # fresh loop each time -> fresh, unawaited future
+            async def run():
+                try:
+                    await ic.get_image("http://x/broken.jpg#404", _fetcher=f)
+                except ValueError:
+                    pass
+            asyncio.run(run())
+            # force GC of the abandoned future so the warning would fire
+            import gc
+            gc.collect()
+        err = capsys.readouterr().err
+        assert "never retrieved" not in err
+
 
 class TestEvict:
     def test_lru_eviction(self, cache_dir, monkeypatch):

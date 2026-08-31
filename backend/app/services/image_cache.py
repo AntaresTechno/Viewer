@@ -31,6 +31,22 @@ _EXT_BY_TYPE = {
 _inflight: dict[str, asyncio.Future[Path]] = {}
 
 
+def _retrieve_future(_f: asyncio.Future[Path]) -> None:
+    """Read (and so "retrieve") a single-flight future's outcome.
+
+    A request whose download failed sets an exception on the shared single-flight
+    future. If no concurrent request ever awaits that future, asyncio logs
+    "Future exception was never retrieved" when it is GC'd. Reading the exception
+    here marks it retrieved (silencing that warning) without consuming it for any
+    concurrent awaiter, which still receives the exception normally.
+    """
+    if _f.done() and not _f.cancelled():
+        try:
+            _f.exception()
+        except Exception:  # noqa: BLE001 - swallow only the retrieved outcome
+            pass
+
+
 def _key_for(url: str) -> str:
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
 
@@ -145,6 +161,9 @@ async def get_image(
     except Exception as exc:
         if not fut.done():
             fut.set_exception(exc)
+            # silence "Future exception was never retrieved" when no concurrent
+            # request ever awaits this single-flight future
+            fut.add_done_callback(_retrieve_future)
         raise
     finally:
         # waiters keep their reference to fut; new requests start a fresh fetch
