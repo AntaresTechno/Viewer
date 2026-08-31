@@ -43,10 +43,14 @@ def _log_list_response(source: dict, res: StrResponse, *, kind: str) -> None:
                    kind, name, res.status, size, res.url)
         return
     # 空/纯空白：WARNING（未配置 handler 时也会经 lastResort 输出到 stderr）
+    # 响应头里常有风控/限流线索（content-length、x-tt-logid 等），一并附上。
+    hdrs = res.headers or {}
+    summary = "; ".join(f"{k}={v}" for k, v in list(hdrs.items())[:12])
+    head_txt = f" | 响应头: {summary[:600]}" if summary else ""
     _LOG.warning(
         "[books] %s 响应为空: source=%s status=%s bytes=%d url=%s "
-        "-> 空 body 无法解析，已短路为空列表", kind, name, res.status, size,
-        res.url)
+        "-> 空 body 无法解析，已短路为空列表%s",
+        kind, name, res.status, size, res.url, head_txt)
 
 
 def _as_dict(value: Any) -> dict:
