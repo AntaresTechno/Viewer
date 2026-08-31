@@ -2,7 +2,8 @@
 
 > 状态：**设计已确认 + 迁移已完成（S1–S5）**。
 > 已确认决策：① SSO 分组「配置为主 + 书源 `extra` 可选覆盖」；② 适配器「自注册」；
-> ③ 封面 byteimg HEIC 泛化**本次不做**（留待办）。符合「保持番茄可用性不退步」硬约束。
+> ③ 封面 HEIC 转码已泛化为通用 `services/heic.py`（可插拔预处理器 + 本地解码兜底）。
+> 符合「保持番茄可用性不退步」硬约束。
 
 ---
 
@@ -163,11 +164,13 @@ def ensure_session_global(tok=""):
 - 想要第二家跨域 SSO 的书源：往 `settings.session_sso_groups` 加一个分组即可，
   引擎与登录流零改动。
 
-### 3.5 恒为边界、不动（仅记录）
+### 3.5 封面 HEIC 转码 —— 已泛化（`services/heic.py`）
 
-- `plugins/books/plugin.py` 的 `_byteimg_web_url`/`_webify_cover`：HEIC 封面转码，
-  已落在“封面服务”这一边界层，不算引擎耦合。可选的后续泛化：按 MIME/CDN 域名
-  分派转码器，而非 class 方法硬编码。**本次不做**，仅列入待办。
+- 原 `plugins/books/plugin.py` 的 `_byteimg_web_url`/`_webify_cover`：HEIC 封面转码，
+  已落在“封面服务”边界层，且**已泛化为通用可复用服务** `backend/app/services/heic.py`：
+  对所有 HEIC 源生效，走「可插拔的远程 web 预处理器注册表（byteimg 为默认注册的一例，
+  其余 CDN 可 `register_preprocessor(...)` 追加）+ 始终可用的 pillow-heif 本地解码兜底」。
+  插件仅调用 `is_heic(...)` / `webify_heic(...)`，不再持有 byteimg 特化逻辑。
 
 ---
 
@@ -216,7 +219,8 @@ def ensure_session_global(tok=""):
    书源 `extra.sessionSsoGroup` 可对该源覆盖分组（`null`/`[]` 表示该源禁用镜像）。
 2. **适配器启用**：**自注册**——`source_degradation/fanqie.py` 在模块导入时
    `register()`，番茄源默认零配置即可用。
-3. **封面 byteimg HEIC 转码**：**本次不泛化**，纳入待办（§3.5），另行处理。
+3. **封面 byteimg HEIC 转码**：已泛化为通用 `services/heic.py`（可插拔预处理器 + 本地
+   解码兜底），**本次随迁完成**（见 §3.5）。
 
 > 本 repo 原有 pytest 的 fixture 会写 `D:\Project\antares\.cache`（工作区外），沙箱
 > 环境跑不全；每步改动用内联脚本/定向用例在本工作区内验证。设计和迁移说明以本文件为准。

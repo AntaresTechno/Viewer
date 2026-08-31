@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...legado_rule.exceptions import FetchError
+from ...services.heic import is_heic, webify_heic
 from ...services.image_cache import get_image
 from ...services.replace_rules import apply_rules, parse_legado_import
 from ...services.toc_queue import (
@@ -1146,90 +1147,6 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         "</svg>"
     ).encode("utf-8")
 
-    # 浏览器（尤其 Windows）打不开 HEIC/HEIF，直接下发会变成下载 cover.heic。
-    _HEIC_MIME = {
-        "image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence",
-    }
-    _HEIC_BRANDS = (
-        b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis",
-        b"hevm", b"hevs", b"heif", b"mif1", b"mif2", b"msf1",
-    )
-
-    def _is_heic(content: bytes, media_type: str) -> bool:
-        if media_type.lower() in _HEIC_MIME:
-            return True
-        # ISOBMFF 容器：字节 4..8 为 'ftyp'，其后 4 字节品牌
-        head = content[:64]
-        return len(head) > 12 and head[4:8] == b"ftyp" and head[8:12] in _HEIC_BRANDS
-
-    def _byteimg_web_url(url: str) -> str | None:
-        """同一张 byteimg 原图，改用 .image 预处理引用（服务端把 HEIC 转码为
-        web 可显示格式）。无签名、不需任何转换库；非 byteimg 原图返回 None。
-        """
-        try:
-            p = urlsplit(url)
-        except ValueError:
-            return None
-        novel = "/novel-pic/"
-        idx = p.path.find(novel)
-        if idx < 0:
-            return None
-        base = p.path[idx + len(novel):].split("~", 1)[0]
-        if not base:
-            return None
-        return (f"{p.scheme}://{p.netloc}{novel}{base}"
-                f"~tplv-resize:225:300.image")
-
-    async def _webify_cover(url: str, content: bytes, media_type: str,
-                            headers: dict[str, str]) -> tuple[bytes, str]:
-        """封面若是 HEIC：先试 byteimg 智能转码；转不了再用 pillow-heif 本地解码
-        成 JPEG；全失败才回占位图（占位优于下载 .heic）。
-        """
-        if not _is_heic(content, media_type):
-            return content, media_type
-        # 1) byteimg ~.image 智能格式（带 web Accept）：偏向保留源图质量
-        web_url = _byteimg_web_url(url)
-        if web_url:
-            try:
-                wc, wm = await get_image(
-                    web_url,
-                    headers={
-                        **headers,
-                        "Accept": "image/avif,image/webp,image/jpeg,image/png",
-                    },
-                )
-                if wc and not _is_heic(wc, wm):
-                    return wc, wm
-            except Exception:  # noqa: BLE001 - 失败走本地解码兜底
-                pass
-        # 2) 本地 HEIC 解码成 JPEG（pillow-heif，可选依赖，CPU 活放到线程池）
-        loop = asyncio.get_running_loop()
-        jpg = await loop.run_in_executor(None, _heic_to_jpeg, content)
-        if jpg:
-            return jpg, "image/jpeg"
-        # 3) 全部失败 → 占位图
-        return _COVER_PLACEHOLDER, "image/svg+xml"
-
-    def _heic_to_jpeg(content: bytes) -> bytes | None:
-        """用 pillow-heif 把 HEIC 解码成 JPEG；未装 pillow-heif 或解码失败回 None。"""
-        try:
-            import pillow_heif  # noqa: PLC0415
-            pillow_heif.register_heif_opener()
-            from PIL import Image  # noqa: PLC0415
-            import io as _io  # noqa: PLC0415
-        except Exception:  # noqa: BLE001 - 依赖缺失走占位
-            return None
-        try:
-            im = Image.open(_io.BytesIO(content))
-            im.load()
-            if im.mode not in ("RGB", "L"):
-                im = im.convert("RGB")
-            buf = _io.BytesIO()
-            im.save(buf, format="JPEG", quality=88)
-            return buf.getvalue()
-        except Exception:  # noqa: BLE001
-            return None
-
     @router.get("/cover")
     async def cover_proxy(url: str, token: str = ""):
         """封面/插图服务：首次下载成文件存到 data/covers/，之后直接返回本地文件。
@@ -1304,13 +1221,12 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                 return Response(content=_COVER_PLACEHOLDER, media_type="image/svg+xml")
 
         # 下载成文件存到 data/covers/。HEIC 先转成 web 格式（浏览器打不开 HEIC，
-        # 否则会直接下载成 cover.heic）；仍转换失败则占位，绝不把 HEIC 下发。
-        if _is_heic(content, media_type):
-            content, media_type = await _webify_cover(
-                url, content, media_type, base_headers,
-            )
-            if _is_heic(content, media_type):
+        # 否则会直接下载成 cover.heic）；转失败则占位，绝不把 HEIC 下发。
+        if is_heic(content, media_type):
+            out = await webify_heic(url, content, media_type, headers=base_headers)
+            if out is None:
                 return Response(content=_COVER_PLACEHOLDER, media_type="image/svg+xml")
+            content, media_type = out
         dest = covers / f"{key}{_ext_for_cover(media_type, url)}"
         dest.write_bytes(content)
         return Response(
