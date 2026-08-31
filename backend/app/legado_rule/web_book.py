@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import html as html_mod
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -22,6 +23,30 @@ from .source_degradation import guest_reader_for, load_builtin
 # The engine core only asks "is there an adapter for this source?" and never
 # branches on concrete book-source domains.
 load_builtin()
+
+_LOG = logging.getLogger("viewer.legado.web_book")
+
+
+def _log_list_response(source: dict, res: StrResponse, *, kind: str) -> None:
+    """请求级日志：最终 URL / HTTP 状态 / 响应长度，空响应高亮为 WARNING。
+
+    空 body 是"<js> 列表规则 JSON.parse 炸成 unexpected end of input / 搜不到
+    东西"的常见根因（接口门禁、签名失败、限流都会回空）。这里把它显式打出来，
+    便于一眼分辨是"请求 URL 不对"还是"接口回空"。与书源无关，通用记录。
+    """
+    name = str(source.get("bookSourceName")
+               or source.get("bookSourceUrl") or "")
+    body = res.body or ""
+    size = len(body)
+    if size and body.strip():
+        _LOG.debug("[books] %s 响应: source=%s status=%s bytes=%d url=%s",
+                   kind, name, res.status, size, res.url)
+        return
+    # 空/纯空白：WARNING（未配置 handler 时也会经 lastResort 输出到 stderr）
+    _LOG.warning(
+        "[books] %s 响应为空: source=%s status=%s bytes=%d url=%s "
+        "-> 空 body 无法解析，已短路为空列表", kind, name, res.status, size,
+        res.url)
 
 
 def _as_dict(value: Any) -> dict:
@@ -181,6 +206,9 @@ async def _fetch_book_list(
     res = await fetch_str(aurl)
     if res.error:
         raise FetchError(res.error, res.status)
+    # 先记录请求级信息，再解析：空响应/异常 URL 一眼可见。
+    _log_list_response(source, res,
+                       kind="search" if is_search else "explore")
     # 规则求值可能内嵌同步 java.ajax（dukpy 无法 await），放到线程池执行，
     # 避免阻塞事件循环拖慢所有并发请求。
     return await asyncio.to_thread(
