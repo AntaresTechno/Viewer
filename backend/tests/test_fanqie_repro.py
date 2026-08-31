@@ -496,43 +496,46 @@ def test_rule_book_info_init_can_replace_content():
 
 
 def test_fq_guest_fallback_helpers():
-    """访客降级辅助函数：域名判定 / book_id 抽取 / XHTML->正文纯函数可离线测试。"""
-    from app.legado_rule import web_book as wb
+    """访客降级辅助函数：域名判定 / book_id 抽取 / XHTML->正文纯函数可离线测试。
 
-    assert wb._fq_domain("https://reading.snssdk.com/reading/bookapi/x")
-    assert wb._fq_domain("https://fanqienovel.com/book/1")
-    assert not wb._fq_domain("https://www.example.com/a")
+    这些辅助已随来源去耦迁入 source_degradation.fanqie（web_book 不再持有）。
+    """
+    from app.legado_rule.source_degradation import fanqie as fq
 
-    assert wb._fq_book_id(
+    assert fq._fq_domain("https://reading.snssdk.com/reading/bookapi/x")
+    assert fq._fq_domain("https://fanqienovel.com/book/1")
+    assert not fq._fq_domain("https://www.example.com/a")
+
+    assert fq._fq_book_id(
         "https://reading.snssdk.com?a=1&book_id=7276384138653862966&genre=4"
     ) == "7276384138653862966"
-    assert wb._fq_book_id("https://x.com/book/123") is None
+    assert fq._fq_book_id("https://x.com/book/123") is None
 
     xhtml = ('<?xml version="1.0"?><!DOCTYPE html><html><head></head><body>'
              '<p>第一段文本</p><p>Second line.</p></body></html>')
-    out = wb._fq_xhtml_to_paragraphs(xhtml)
+    out = fq._fq_xhtml_to_paragraphs(xhtml)
     assert "第一段文本" in out and "Second line." in out
     assert out.index("第一段文本") < out.index("Second line.")
     assert "\u3000\u3000" in out  # 全角缩进与源站论文对齐
 
     # 有 <p> 时剔除 <em> 等内联标签并还原实体
-    out2 = wb._fq_xhtml_to_paragraphs("<p>ab &amp; <em>cd</em> ef</p>")
+    out2 = fq._fq_xhtml_to_paragraphs("<p>ab &amp; <em>cd</em> ef</p>")
     assert "ab & cd ef" in out2
 
 
 def test_fq_replace_cover_origin():
     """"replaceCover 语义：缩略/带签名参数 的封面 -> 无签名原图，避免 `&` 截断 403/400。"""
-    from app.legado_rule import web_book as wb
+    from app.legado_rule.source_degradation import fanqie as fq
 
-    assert wb._fq_replace_cover("").__class__ is str
-    assert wb._fq_replace_cover("") == ""
+    assert fq._fq_replace_cover("").__class__ is str
+    assert fq._fq_replace_cover("") == ""
     # 常见的 protocol-relative 缩略图 + ~resize + ?签名
     src = ("//p6-novel-sign.byteimg.com/novel-pic/"
            "d1ffe7fa1ae9d423e23dbd21779b006e~tplv-resize:225:300.image"
            "?lk3s=x&x-expires=1&x-signature=YQ%3D%3D")
-    out = wb._fq_replace_cover(src)
+    out = fq._fq_replace_cover(src)
     assert out == ("https://p6-novel.byteimg.com/origin/"
                    "novel-pic/d1ffe7fa1ae9d423e23dbd21779b006e")
     # 已是 origin/https 直接透传
     direct = "https://p6-novel.byteimg.com/origin/novel-pic/abc"
-    assert wb._fq_replace_cover(direct) == direct
+    assert fq._fq_replace_cover(direct) == direct
