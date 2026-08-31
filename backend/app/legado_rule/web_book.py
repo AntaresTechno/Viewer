@@ -214,6 +214,13 @@ def _parse_book_list(
     books: list[dict] = []
     pattern = str(source.get("bookUrlPattern") or "")
 
+    # 空/纯空白响应：无内容可解析。对 `<js>` 型 list_rule 而言，其内置的
+    # `JSON.parse(result)` 会把空串直接抛成隐晦的 "SyntaxError: unexpected
+    # end of input"（把整源标记为失败，如搜索接口空返回时）。这里干净地
+    # 短路为空列表，语义即"该接口这次没回数"。
+    if not str(body or "").strip():
+        return []
+
     # legado BookList: 搜索结果重定向到详情页（URL 命中 bookUrlPattern）时，
     # 直接按详情页规则解析出单本结果。
     if is_search and pattern:
