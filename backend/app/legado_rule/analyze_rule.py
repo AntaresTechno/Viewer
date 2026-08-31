@@ -339,7 +339,10 @@ class AnalyzeRule:
             "cookie": {},
             "cache": {},
             "source": self.source or None,
-            "book": self.book or None,
+            # legado 把 book 绑成 Book 实体（带 putCustomVariable / 可写属性）。
+            # 传 dict 而非 None，BookBridge 才能挂上并提供这些方法；
+            # 写 book.intro / book.durChapterIndex 也要回写到 self.book。
+            "book": self.book if isinstance(self.book, dict) else None,
             "result": result,
             "baseUrl": self.base_url,
             "chapter": {"title": self.chapter_title} if self.chapter_title else None,
@@ -348,17 +351,54 @@ class AnalyzeRule:
             "nextChapterUrl": self.next_chapter_url,
             "rssArticle": None,
             "fromBookInfo": False,
-            "__ns__": bridges_for(self.source) if self.source else {},
+            "__ns__": bridges_for(self.source, self.book) if self.source else {},
         }
 
     def eval_js(self, js_code: str, result: Any = None) -> Any:
         if detect_engine() is None:
             raise RuleError("未安装 quickjs，无法执行书源中的 JS 规则（pip install quickjs）")
-        ev = self._js_evaluator
-        if ev is None:
-            ev = self._js_evaluator = JsEvaluator(self._eval_bindings(None))
+        ev = self._get_js_evaluator()
+        # legado 会在执行 JS 前把规则串里的 {{...}} / @get:{...} 模板整体替换
+        # （位置不限，@js: 块内也一样）。番茄 bookName 规则就这么写：
+        #   gender = String({{$.gender}});
+        # 不替换会变成 `String({{$.gender}})` → SyntaxError: invalid property name，
+        # 该字段全落空，详情/发现页书名全空、整本书被跳过。
+        js_code = self._resolve_js_templates(js_code, result)
         ev.set_binding("result", result)
         return ev.eval(js_code)
+
+    def _get_js_evaluator(self) -> JsEvaluator:
+        if self._js_evaluator is None:
+            self._js_evaluator = JsEvaluator(self._eval_bindings(None))
+        return self._js_evaluator
+
+    def _resolve_js_templates(self, code: str, result: Any) -> str:
+        """把嵌入 JS 代码里的 ``{{规则}}`` / ``@get:{key}`` 模板替换成实际值。
+
+        语义对齐 ``_make_up_rule`` 里 _JS_TYPE / _GET_TYPE 的分支：``{{…}}``，
+        内容是规则（``$.``/``@``/``//`` 开头）就按子规则 get_string 求值，
+        否则当成 JS 表达式求值；``@get:{key}`` 取缓存变量。
+        """
+
+        def _repl(m: re.Match) -> str:
+            get_key = m.group(1)
+            if get_key is not None:
+                return str(self.get(get_key) or "")
+            param = (m.group(2) or "").strip()
+            if self._is_nested_rule(param):
+                return str(self.get_string(param, is_url=False, unescape=False))
+            ev = self._get_js_evaluator().eval(param)
+            if ev is None:
+                return ""
+            if isinstance(ev, float) and ev == int(ev) and abs(ev) < 1e15:
+                return "%.0f" % ev
+            return ev if isinstance(ev, str) else _to_str(ev)
+
+        return EVAL_PATTERN.sub(_repl, code)
+
+    @staticmethod
+    def _is_nested_rule(s: str) -> bool:
+        return s.startswith(("@", "$.", "$[", "//"))
 
     # -------------------------------------------------------------- results
     def get_string(self, rule_str: str | None, m_content: Any = None,

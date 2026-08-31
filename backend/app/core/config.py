@@ -24,6 +24,11 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3080",
     ]
     request_timeout: float = 15.0
+    # JS 层 java.ajax / java.connect 的请求超时（秒）。legado 的 ajax 没有
+    # 超时（阻塞直到响应），书源的登录/签名/预热端点往往很慢（番茄书源发现页
+    # 的 sg.91loli.cc/api/sign 在默认 15s 请求超时内读不到响应而报
+    # "The read operation timed out"），因此 JS 桥内请求给一个更宽的独立默认。
+    js_ajax_timeout: float = 45.0
     default_user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -33,6 +38,11 @@ class Settings(BaseSettings):
     search_per_source_limit: int = 20
     image_cache_mb: int = 300         # 图片磁盘缓存上限（LRU 逐出）
     replace_regex_timeout: float = 5.0  # 单条净化规则正则执行超时
+
+    # ---- JS 引擎（书源 @js/{{}} 规则）----
+    # auto：按当前安装情况自动选择（quickjs > stpyv8 > dukpy）；
+    # 也可显式指定 quickjs / stpyv8 / dukpy 之一，优先于运行期 UI 覆盖。
+    js_engine: str = "auto"
 
     # ---- 并发控制（"可调线程"） ----
     parser_concurrency: int = 4        # 解析器目录/正文多页并行的最大并发请求数

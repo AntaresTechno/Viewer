@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from urllib.parse import urlsplit
 
 from ..core.config import DATA_DIR
@@ -43,6 +44,16 @@ _EMPTY: dict = {
     "cookies": {},
     "cache": {},
 }
+
+
+# 番茄/头条的账号会话是「跨域单点登录」：同一个 sessionid 同时下发到
+# fanqienovel.com 与 snssdk.com。书源分别从 fanqienovel.com 读 sessionid
+# 拼 ck（搜索/详情走 URL），又要求 java.ajax 在 snssdk.com 挂上 sessionid
+# Cookie（目录/正文走 Cookie）。若只存到其中一个 eTLD+1，登录态就「局部
+# 生存」——发现页只靠设备签名能过，目录/正文/搜索却因另一域名读不到
+# sessionid 而拿到空 body。故把这两个 SSO 域名的 sessionid 保持镜像，
+# 一份登录态全局可用。
+_FQ_SESSION_DOMAINS = ("snssdk.com", "fanqienovel.com")
 
 
 # --------------------------------------------------------------------- io
@@ -115,34 +126,88 @@ def get_cookie(url: str) -> str:
         return str(_load()["cookies"].get(domain, ""))
 
 
+def _session_targets(domain: str, cmap: dict) -> set[str]:
+    """写入目标域名集合：本域名 + （含 sessionid 时）同域番茄/头条 SSO 镜像。
+
+    只有写入的 cookie 里带 ``sessionid`` 且落在 SSO 域名上才会扩散到兄弟域
+    （fanqienovel.com <-> snssdk.com）；其它情况只写本域名，行为不变。
+    """
+    targets: set[str] = {domain}
+    if "sessionid" in cmap and domain in _FQ_SESSION_DOMAINS:
+        targets.update(_FQ_SESSION_DOMAINS)
+    return targets
+
+
 def set_cookie(url: str, cookie: str) -> None:
-    """整体覆盖该域名的 Cookie（CookieStore.setCookie 语义）。"""
+    """整体覆盖该域名的 Cookie（CookieStore.setCookie 语义）。
+
+    sessionid 会自动镜像到番茄/头条 SSO 兄弟域名，保证一份登录态全局可用。
+    """
     domain = subdomain(url)
     if not domain:
         return
+    cmap = cookie_to_map(cookie) if str(cookie or "").strip() else {}
+    targets = _session_targets(domain, cmap)
 
     def _set(data: dict) -> None:
-        if str(cookie or "").strip():
-            data["cookies"][domain] = str(cookie)
-        else:
+        if not cmap:
             data["cookies"].pop(domain, None)
+            return
+        for dom in targets:
+            if dom == domain:
+                # 本域名整体覆盖
+                data["cookies"][dom] = map_to_cookie(cmap)
+            else:
+                # 兄弟域名仅同步 sessionid，保留其原有其它字段
+                oldm = cookie_to_map(str(data["cookies"].get(dom, "")))
+                oldm["sessionid"] = cmap["sessionid"]
+                data["cookies"][dom] = map_to_cookie(oldm)
 
     _mutate(_set)
 
 
 def replace_cookie(url: str, cookie: str) -> None:
-    """合并写入：新旧 Cookie 逐项 merge，新值覆盖旧值。"""
+    """合并写入：新旧 Cookie 逐项 merge，新值覆盖旧值。
+
+    sessionid 会自动镜像到番茄/头条 SSO 兄弟域名，保证一份登录态全局可用。
+    """
     if not str(cookie or "").strip():
         return
     domain = subdomain(url)
     if not domain:
         return
+    cmap = cookie_to_map(cookie)
+    targets = _session_targets(domain, cmap)
     with _LOCK:
         data = _load()
-        old = str(data["cookies"].get(domain, ""))
-        merged = map_to_cookie({**cookie_to_map(old), **cookie_to_map(cookie)})
-        data["cookies"][domain] = merged or ""
+        for dom in targets:
+            old = str(data["cookies"].get(dom, ""))
+            # 本域名合入全部新字段；兄弟域名仅同步 sessionid
+            to_write = {**cmap} if dom == domain else {"sessionid": cmap["sessionid"]}
+            merged = map_to_cookie({**cookie_to_map(old), **to_write})
+            data["cookies"][dom] = merged or ""
         _save(data)
+
+
+def ensure_session_global(tok: str = "") -> None:
+    """把番茄账号 session 镜像到全部 SSO 域名。
+
+    主要给登录流用：书源 ``[账号登录]``（login_()）用 ``token：`` 表单值或
+    已有 cookie 拼出 ``sessionid=…``。此后目录/正文（走 snssdk.com Cookie）
+    与搜索/详情（走 fanqienovel.com 的 ck）都能拿到同一份登录态。
+    """
+    val = str(tok or "").strip()
+    if not val:
+        with _LOCK:
+            data = _load()
+            for dom in _FQ_SESSION_DOMAINS:
+                m = cookie_to_map(str(data["cookies"].get(dom, "")))
+                if m.get("sessionid"):
+                    val = m["sessionid"]
+                    break
+    if not val:
+        return
+    replace_cookie("https://fanqienovel.com", f"sessionid={val}")
 
 
 def remove_cookie(url: str) -> None:
@@ -301,16 +366,48 @@ def put_source_data(source_key: str, key: str, value: str) -> str:
     return value
 
 
+def _cache_unpack(entry: Any) -> tuple[str, float]:
+    """读取 cache 条目：兼容新旧两种存储格式。
+
+    新格式 ``{"v": <值>, "exp": <到期时间戳或 0>}``（带 TTL）；
+    旧格式是裸字符串（永不过期）。
+    """
+    if isinstance(entry, dict):
+        value = str(entry.get("v", "") or "")
+        try:
+            exp = float(entry.get("exp", 0) or 0)
+        except (TypeError, ValueError):
+            exp = 0.0
+        return value, exp
+    return ("" if entry is None else str(entry)), 0.0
+
+
 def cache_get(key: str) -> str:
     with _LOCK:
-        return str(_load()["cache"].get(str(key), "") or "")
+        entry = _load()["cache"].get(str(key))
+    if entry is None:
+        return ""
+    value, exp = _cache_unpack(entry)
+    if exp and time.time() > exp:
+        # 过期：惰性删除，避免每次读都要落盘
+        cache_delete(key)
+        return ""
+    return value
 
 
-def cache_put(key: str, value: str) -> str:
+def cache_put(key: str, value: str, save_time: int = 0) -> str:
+    """写入 cache；``save_time`` > 0 表示 TTL 秒数（CacheManager.put 语义）。"""
     value = "" if value is None else str(value)
+    try:
+        ttl = int(save_time or 0)
+    except (TypeError, ValueError):
+        ttl = 0
+    entry: Any = value
+    if ttl > 0:
+        entry = {"v": value, "exp": time.time() + ttl}
 
     def _put(data: dict) -> None:
-        data["cache"][str(key)] = value
+        data["cache"][str(key)] = entry
 
     _mutate(_put)
     return value

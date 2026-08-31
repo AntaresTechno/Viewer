@@ -40,6 +40,19 @@ export interface PluginItem {
   enabled: boolean;
 }
 
+export interface JsEngineItem {
+  key: string;
+  title: string;
+  installed: boolean;
+  current: boolean;
+}
+
+export interface JsEngines {
+  requested: string;
+  current: string | null;
+  items: JsEngineItem[];
+}
+
 export interface DashboardSummary {
   users_total: number;
   sources_total: number;
@@ -173,11 +186,41 @@ export type ShelfSort = "added" | "updated" | "read";
 /** 书架排序方向：desc 倒序（新的在前，默认）/ asc 正序（旧的在前） */
 export type ShelfOrder = "asc" | "desc";
 
+/**
+ * 发现分类 / 控件（legado ExploreKind）。
+ *
+ * legado 的发现页不只有 url 型分类，还有 text/button/toggle/select 四种
+ * 交互控件（番茄书源的 ⚙、搜索、分类下拉都是这类），每个控件带一条
+ * `action` JS，由服务端求值。`style` 是 flex 布局属性，决定按钮占多宽。
+ */
 export interface ExploreKind {
   title: string;
   url: string | null;
+  /** url | text | button | toggle | select */
   type: string;
+  /** toggle / select 的可选项 */
   chars?: string[];
+  /** 控件的 action JS（text/button/toggle/select 用） */
+  action?: string | null;
+  /** toggle / select 的默认值 */
+  default?: string | null;
+  /** flex 布局（layout_flexGrow / layout_flexBasisPercent / layout_wrapBefore …） */
+  style?: Record<string, unknown> | null;
+}
+
+/** 发现页控件动作的执行结果（服务端求值 action 后回传的信号）。 */
+export interface ExploreActionResult {
+  /** 书源请求重建发现页（分类切换后按钮集合会变） */
+  refresh: boolean;
+  /** 书源请求打开登录页（⚙ 按钮 → java.open('login')） */
+  openLogin: boolean;
+  /** 书源请求以该关键词搜索（java.searchBook） */
+  searchKey: string | null;
+  /** 书源 JS 打印的日志（java.toast / java.log） */
+  log: string[];
+  /** 控件当前值（infoMap），用于回显 */
+  values: Record<string, string>;
+  error: string | null;
 }
 
 export interface ReplaceRuleItem {
@@ -652,7 +695,23 @@ export const api = {
   exploreKinds: async (sourceUrl: string) => {
     const params = new URLSearchParams({ source_url: sourceUrl });
     const r = await http.get(`/books/explore/kinds?${params.toString()}`);
-    return r.data as { items: ExploreKind[] };
+    return r.data as { items: ExploreKind[]; values: Record<string, string> };
+  },
+  /**
+   * 执行发现页控件的 action（服务端求值书源 JS）。
+   * value 是 select/toggle/text 的新值，会先写入 infoMap 再执行 action。
+   */
+  exploreKindAction: async (
+    sourceUrl: string,
+    kind: ExploreKind,
+    value?: string | null,
+  ): Promise<ExploreActionResult> => {
+    const r = await http.post<ExploreActionResult>("/books/explore/action", {
+      source_url: sourceUrl,
+      kind,
+      value: value ?? null,
+    });
+    return r.data;
   },
   exploreBooks: async (sourceUrl: string, url: string, page: number) => {
     const params = new URLSearchParams({ source_url: sourceUrl, url, page: String(page) });
@@ -1059,6 +1118,16 @@ export const api = {
   },
   webdavLegadoImport: async () => {
     const r = await http.post<WebDavLegadoImportResult>("/webdav/legado/import");
+    return r.data;
+  },
+
+  /* ------------------------------------------------------------ JS 引擎 */
+  jsEngines: async () => {
+    const r = await http.get<JsEngines>("/js/engines");
+    return r.data;
+  },
+  jsSetEngine: async (engine: string) => {
+    const r = await http.put<JsEngines>("/js/engine", { engine });
     return r.data;
   },
 };

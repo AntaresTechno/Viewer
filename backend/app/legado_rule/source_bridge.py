@@ -49,6 +49,24 @@ class SourceBridge:
         info = source_state.get_login_info(self._key)
         return None if info is None else json.dumps(info, ensure_ascii=False)
 
+    def getLoginInfoMap(self) -> str:
+        """``BaseSource.getLoginInfoMap()``：登录表单数据（java.util.Map）。
+
+        legado 返回 MutableMap，书源用 ``.get(key)`` 取值；Python 桥只能跨
+        JS 边界传标量，因此这里返回 JSON 字符串，由 ``legado_objects.js``
+        包装成带 ``.get()`` 的对象。未保存过时按 loginUi 构造默认值
+        （对齐 BaseSource.getLoginInfoMap 的兜底语义）。
+        """
+        info = source_state.get_login_info(self._key)
+        if info is None:
+            try:
+                from .source_login import default_login_info
+
+                info = default_login_info(self._source)
+            except Exception:  # noqa: BLE001
+                info = {}
+        return json.dumps(info or {}, ensure_ascii=False)
+
     def putLoginInfo(self, info: str) -> bool:
         try:
             obj = json.loads(str(info or ""))
@@ -105,6 +123,221 @@ class SourceBridge:
         lib = self._source.get("jsLib")
         return str(lib) if lib else None
 
+    # ------------------------------------------------------------- host UI
+    def refreshExplore(self) -> None:
+        """``BaseSource.refreshExplore``：请求宿主重建发现页（服务端为 no-op）。"""
+        print("[source-js] [refreshExplore]", self._key)
+
+
+class BookBridge:
+    """绑定在 ``book`` 上的 BaseBook / RuleDataInterface 方法子集。
+
+    legado 把 ``book`` 绑成 ``Book`` 实体：``book.putCustomVariable()``、
+    ``book.getVariable("custom")``、``book.intro = …``、``book.durChapterIndex
+    = …`` 在书源规则里非常常见（番茄书源的目录规则就用 ``book.intro`` 回写
+    书评、用 ``book.durChapterIndex`` 同步阅读进度）。此前 ``book`` 只是纯
+    dict，属性写回会丢失、方法调用直接 TypeError。
+    """
+
+    def __init__(self, book: dict | None = None):
+        # 刻意共享调用方的 dict（不 copy）：书源写 book.intro / book
+        # .durChapterIndex 后，web_book 的调用方能直接看到更新。
+        self._book = book if isinstance(book, dict) else {}
+        self._custom: dict = {}
+        try:
+            raw = self._book.get("variableMap")
+            if isinstance(raw, str) and raw.strip():
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    self._custom = parsed
+            elif isinstance(raw, dict):
+                self._custom = dict(raw)
+        except Exception:  # noqa: BLE001
+            self._custom = {}
+
+    # ------------------------------------------------------------- variables
+    def getVariable(self, key: str | None = None) -> str:
+        """"getVariable()" 取整体 JSON（Book 的变量包），getVariable(k) 取单项。"""
+        if key is None:
+            return json.dumps(self._custom, ensure_ascii=False)
+        return str(self._custom.get(str(key), ""))
+
+    def putVariable(self, key: str, value: str | None = None) -> None:
+        if value is None:  # putVariable(json) —— 整体覆盖
+            self._set_all(key)
+            return
+        self._custom[str(key)] = "" if value is None else str(value)
+        self._flush()
+
+    def setVariable(self, key: str, value: str | None = None) -> None:
+        self.putVariable(key, value)
+
+    def putCustomVariable(self, value: str | None) -> None:
+        self._custom["custom"] = "" if value is None else str(value)
+        self._flush()
+
+    def getCustomVariable(self) -> str:
+        return str(self._custom.get("custom", ""))
+
+    def _set_all(self, raw: Any) -> None:
+        try:
+            obj = raw if isinstance(raw, dict) else json.loads(str(raw or ""))
+        except Exception:  # noqa: BLE001
+            obj = None
+        if isinstance(obj, dict):
+            self._custom = {str(k): "" if v is None else str(v)
+                            for k, v in obj.items()}
+            self._flush()
+
+    def _flush(self) -> None:
+        self._book["variableMap"] = json.dumps(self._custom, ensure_ascii=False)
+
+    # ------------------------------------------------------------ accessors
+    def getBookUrl(self) -> str:
+        return str(self._book.get("bookUrl") or "")
+
+    def getName(self) -> str:
+        return str(self._book.get("name") or "")
+
+    def getAuthor(self) -> str:
+        return str(self._book.get("author") or "")
+
+    def getIntro(self) -> str:
+        return str(self._book.get("intro") or "")
+
+    def getTocUrl(self) -> str:
+        return str(self._book.get("tocUrl") or "")
+
+    def getOrigin(self) -> str:
+        return str(self._book.get("origin") or "")
+
+    def getGroup(self) -> int:
+        try:
+            return int(self._book.get("group") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def getDurChapterIndex(self) -> int:
+        try:
+            return int(self._book.get("durChapterIndex") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def putDurChapterIndex(self, index: Any) -> None:
+        try:
+            self._book["durChapterIndex"] = int(index)
+        except (TypeError, ValueError):
+            pass
+
+    def putIntro(self, intro: Any) -> None:
+        self._book["intro"] = "" if intro is None else str(intro)
+
+    def putName(self, name: Any) -> None:
+        self._book["name"] = "" if name is None else str(name)
+
+    def putBookUrl(self, url: Any) -> None:
+        self._book["bookUrl"] = "" if url is None else str(url)
+
+    def putTocUrl(self, url: Any) -> None:
+        self._book["tocUrl"] = "" if url is None else str(url)
+
+    # JS 侧 `book.intro = x` / `book.durChapterIndex = i` 这类属性赋值最终
+    # 落到 __setattr__；legado 的 Book 是 JavaBean，属性可写。
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        self._book[name] = value
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        v = self._book.get(name)
+        return "" if v is None else v
+
+    def to_dict(self) -> dict:
+        self._flush()
+        return self._book
+
+
+class InfoMapBridge:
+    """绑定在 ``infoMap`` 上的 InfoMap 方法子集。
+
+    legado: ``class InfoMap(val sourceUrl) : MutableMap<String, String>``，
+    发现页 JS 用它读写分类/关键词等持久输入：
+    ``infoMap['关键词：']``、``infoMap.get(k)``、``infoMap.set(map)``、
+    ``infoMap.save()``（jsLib 的 ``saveKeys(infoMap)`` 正是后两者的组合）。
+    此前 binding 里是纯 ``{}``，``saveKeys`` 一调用就 TypeError。
+    """
+
+    def __init__(self, source: dict | None = None):
+        from . import source_state
+
+        self._state = source_state
+        self._key = source_key(source)
+        self._info = f"infoMap_{self._key}"
+
+    def _map(self) -> dict[str, str]:
+        try:
+            raw = self._state.cache_get(self._info)
+        except Exception:  # noqa: BLE001
+            raw = ""
+        if not raw:
+            return {}
+        try:
+            obj = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return {}
+        return obj if isinstance(obj, dict) else {}
+
+    def get(self, key: str) -> str:
+        return str(self._map().get(str(key), ""))
+
+    def put(self, key: str, value: str) -> str:
+        data = self._map()
+        data[str(key)] = "" if value is None else str(value)
+        self._state.cache_put(self._info, json.dumps(data, ensure_ascii=False))
+        return "" if value is None else str(value)
+
+    def set(self, value: dict | None) -> None:
+        """``InfoMap.set(map)``：整体替换。"""
+        data = value if isinstance(value, dict) else {}
+        clean = {str(k): "" if v is None else str(v) for k, v in data.items()}
+        self._state.cache_put(self._info, json.dumps(clean, ensure_ascii=False))
+
+    def save(self, time_: Any = 0, need: Any = True) -> None:
+        """``InfoMap.save(time, need)``：写盘（这里每次 put/set 已落盘）。"""
+        return None
+
+    def remove(self, key: str) -> None:
+        data = self._map()
+        data.pop(str(key), None)
+        self._state.cache_put(self._info, json.dumps(data, ensure_ascii=False))
+
+    def containsKey(self, key: str) -> bool:  # noqa: N802
+        return str(key) in self._map()
+
+    def isEmpty(self) -> bool:  # noqa: N802
+        return not self._map()
+
+    def size(self) -> int:
+        return len(self._map())
+
+    def keySet(self) -> list[str]:  # noqa: N802
+        return list(self._map().keys())
+
+    def values(self) -> list[str]:
+        return list(self._map().values())
+
+    def toJSON(self) -> str:  # noqa: N802
+        return json.dumps(self._map(), ensure_ascii=False)
+
+    def __getitem__(self, key: str) -> str:
+        return self.get(key)
+
+    def __setitem__(self, key: str, value: str) -> None:
+        self.put(key, value)
+
 
 class CookieBridge:
     """绑定在 ``cookie`` 上的 CookieStore 方法子集。"""
@@ -135,10 +368,19 @@ class CookieBridge:
 
 
 class CacheBridge:
-    """绑定在 ``cache`` 上的 CacheManager 方法子集（全局 KV）。"""
+    """绑定在 ``cache`` 上的 CacheManager 方法子集（全局 KV）。
 
-    def put(self, key: str, value: str) -> str:
-        return source_state.cache_put(key, value)
+    legado 的 ``CacheManager.put(key, value, saveTime)`` 第三参是 TTL（秒），
+    书源（番茄 ruleExplore）用三参形式存分页 session_id，缺了会直接
+    ``TypeError``。TTL 与取值一起存，读取时判过期。
+    """
+
+    def put(self, key: str, value: str, save_time: Any = 0) -> str:
+        try:
+            ttl = int(float(save_time or 0))
+        except (TypeError, ValueError):
+            ttl = 0
+        return source_state.cache_put(key, value, ttl)
 
     def get(self, key: str) -> str:
         return source_state.cache_get(key)
@@ -146,20 +388,28 @@ class CacheBridge:
     def delete(self, key: str) -> None:
         source_state.cache_delete(key)
 
-    def putString(self, key: str, value: str) -> str:
-        return self.put(key, value)
+    def putString(self, key: str, value: str, save_time: Any = 0) -> str:
+        return self.put(key, value, save_time)
 
     def getString(self, key: str) -> str:
         return self.get(key)
 
 
-def bridges_for(source: dict | None) -> dict[str, Any]:
-    """legado evalJS 的公共命名空间桥集合（``__ns__`` 约定）。"""
-    return {
+def bridges_for(source: dict | None, book: dict | None = None) -> dict[str, Any]:
+    """legado evalJS 的公共命名空间桥集合（``__ns__`` 约定）。
+
+    ``book`` 传入时一并挂上 BookBridge：legado 把 book 绑成 Book 实体，
+    书源会调 ``book.putCustomVariable`` / 写 ``book.intro`` / 写
+    ``book.durChapterIndex``，纯 dict 会让这些调用全部 TypeError。
+    """
+    bridges: dict[str, Any] = {
         "source": SourceBridge(source),
         "cookie": CookieBridge(),
         "cache": CacheBridge(),
     }
+    if book is not None:
+        bridges["book"] = BookBridge(book)
+    return bridges
 
 
 class SourceLoginBridge(JavaBridge):

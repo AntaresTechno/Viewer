@@ -40,6 +40,14 @@ class RequestSpec:
     cookie_jar: bool = False
 
 
+def _js_lib_present(source: Any) -> bool:
+    """Whether the source ships a ``jsLib`` that URL rules may call into."""
+    if not isinstance(source, dict):
+        return False
+    lib = source.get("jsLib")
+    return isinstance(lib, str) and bool(lib.strip())
+
+
 def _ns_bridges(source: dict | None) -> dict:
     """legado evalJS 公共命名空间桥（source/cookie/cache），惰性导入避免环。"""
     if not isinstance(source, dict) or not source:
@@ -381,6 +389,42 @@ class AnalyzeUrl:
             "__bridge__": _UrlBridge(self),
             "__ns__": _ns_bridges(self.source),
         }
+        # 书源 URL 规则常调用 jsLib 里的函数（番茄书源的 xGod()）。
+        # eval_js 会另起一次性上下文，看不到 jsLib，因此这里优先复用
+        # 带 jsLib 的求值器（_js_url_evaluator），失败再退回 eval_js。
+        ev = getattr(self, "_js_url_evaluator", None)
+        if ev is not None:
+            try:
+                ev.set_binding("result", result)
+                return ev.eval(code)
+            except Exception:  # noqa: BLE001
+                pass
+        if _js_lib_present(self.source):
+            try:
+                from .js_bridge import JavaBridge, JsEvaluator
+                from .source_bridge import bridges_for
+
+                src = self.source if isinstance(self.source, dict) else {}
+                ev = JsEvaluator({
+                    "__bridge__": JavaBridge(owner=None,
+                                             base_url=self.base_url,
+                                             source=src),
+                    "source": src,
+                    "cookie": {}, "cache": {},
+                    "book": self.rule_data,
+                    "result": result,
+                    "baseUrl": self.base_url,
+                    "page": self.page,
+                    "key": self.key,
+                    "speakText": self.speak_text,
+                    "speakSpeed": self.speak_speed,
+                    "infoMap": self.info_map,
+                    "__ns__": bridges_for(src),
+                })
+                self._js_url_evaluator = ev
+                return ev.eval(code)
+            except Exception:  # noqa: BLE001
+                pass
         return eval_js(code, bindings)
 
     # --------------------------------------------------------------- output
