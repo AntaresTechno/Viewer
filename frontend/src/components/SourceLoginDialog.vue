@@ -8,7 +8,7 @@
  * - web 模式：服务端无 WebView，给出登录网址 + 手工粘贴 Cookie；
  * - 登录头 / Cookie 状态展示与清除。
  */
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import {
   MiuixButton,
   MiuixDialog,
@@ -32,7 +32,24 @@ const form = ref<LoginForm | null>(null);
 const values = reactive<Record<string, string>>({});
 const log = ref<string[]>([]);
 const cookieInput = ref("");
+const cookieUrl = ref("");
 const showHeader = ref(false);
+const showCookie = ref(false);
+
+/** Cookie 默认归属域名：去掉 #fragment（如 reading.snssdk.com#mgz0326 → reading.snssdk.com）。 */
+const defaultCookieUrl = computed(() => {
+  const u = props.sourceUrl || "";
+  return (u.split("#")[0] || u).trim();
+});
+watch(
+  () => props.sourceUrl,
+  (u) => {
+    if (!cookieUrl.value || cookieUrl.value === defaultCookieUrl.value) {
+      cookieUrl.value = defaultCookieUrl.value;
+    }
+  },
+  { immediate: true },
+);
 
 watch(
   () => props.modelValue,
@@ -48,6 +65,7 @@ function closeInner() {
   log.value = [];
   cookieInput.value = "";
   showHeader.value = false;
+  showCookie.value = false;
 }
 
 async function load() {
@@ -120,8 +138,10 @@ const doSaveCookie = () =>
     const r = await api.legadoLoginCookie(
       props.sourceUrl,
       cookieInput.value.trim(),
+      cookieUrl.value,
     );
     cookieInput.value = r.cookie;
+    await refreshStatus();
   });
 
 const doRemoveHeader = () =>
@@ -207,6 +227,31 @@ function openWebUrl() {
           <MiuixButton type="primary" class="login-btn" :disabled="busy" @click="doLogin">
             {{ busy ? "登录中…" : "登 录" }}
           </MiuixButton>
+
+          <button
+            type="button"
+            class="linkbtn"
+            :disabled="busy"
+            @click="showCookie = !showCookie"
+          >{{ showCookie ? "收起 Cookie 登录" : "⟨/⟩ 手工粘贴 Cookie（账号会话）" }}</button>
+          <template v-if="showCookie">
+            <p class="hint">
+              部分书源（如番茄）的目录 / 正文 / 搜索需要账号登录后的
+              <code>sessionid</code> Cookie；「番茄真机」按钮只注册了设备、并非账号登录。
+              请从番茄抓取账号 Cookie 粘贴保存（会写入到下方域名）。
+            </p>
+            <MiuixInput v-model="cookieUrl" label="Cookie 归属域名" single-line />
+            <textarea
+              v-model="cookieInput"
+              rows="3"
+              placeholder="粘贴 Cookie，如：sessionid=xxx; ttwid=yyy"
+            ></textarea>
+            <div class="btn-row">
+              <MiuixButton type="primary" :disabled="busy" @click="doSaveCookie">
+                保存 Cookie
+              </MiuixButton>
+            </div>
+          </template>
         </template>
 
         <!-- Web 模式：登录网址 + 手工 Cookie -->

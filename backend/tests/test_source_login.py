@@ -75,6 +75,38 @@ class TestCookieStore:
         assert source_state.get_cookie("https://www.example.com") == \
             "a=1; b=9; c=3"
 
+    def test_fq_sessionid_mirrors_globally(self, state_file):
+        """番茄 sessionid 需在 fanqienovel.com(拼ck) / snssdk.com(java.ajax 挂Cookie)
+        全局可见；任一域名写入都要镜像到兄弟域名，且只带 sessionid、不搬其它字段。"""
+        # 只在 reading.snssdk.com 张贴 sessionid
+        source_state.set_cookie("https://reading.snssdk.com",
+                                "sessionid=SESS_ABC; ttwid=tt0")
+        fq = source_state.cookie_to_map(
+            source_state.get_cookie("https://fanqienovel.com"))
+        sns = source_state.cookie_to_map(
+            source_state.get_cookie("https://reading.snssdk.com"))
+        assert fq.get("sessionid") == "SESS_ABC"          # 镜像到兄弟域
+        assert "ttwid" not in fq                           # 不搬其它字段
+        assert sns.get("sessionid") == "SESS_ABC"
+        assert sns.get("ttwid") == "tt0"                   # 本域名保留原字段
+
+        # 反向：从 fanqienovel.com 写入也镜像回 snssdk.com
+        source_state.set_cookie("https://fanqienovel.com", "sessionid=SESS_XYZ")
+        sns2 = source_state.cookie_to_map(
+            source_state.get_cookie("https://reading.snssdk.com"))
+        assert sns2.get("sessionid") == "SESS_XYZ"
+        assert sns2.get("ttwid") == "tt0"                  # 旧的其它字段仍在
+
+        # ensure_session_global(token)：用登录表单 token 拉全局登录态
+        source_state.ensure_session_global("TOKEN_SESS")
+        for url in ("https://fanqienovel.com", "https://reading.snssdk.com"):
+            m = source_state.cookie_to_map(source_state.get_cookie(url))
+            assert m.get("sessionid") == "TOKEN_SESS"
+
+        # 非 SSO 域名不受影响（无镜像）
+        source_state.set_cookie("https://www.example.com", "sessionid=X")
+        assert source_state.get_cookie("https://other.example.net") == ""
+
     def test_cookie_map_roundtrip(self):
         m = source_state.cookie_to_map("a=1; b=2 ; =bad")
         assert m == {"a": "1", "b": "2"}
