@@ -270,6 +270,33 @@ def remove_cookie(url: str) -> None:
     _mutate(_rm)
 
 
+def remove_cookie_key(url: str, key: str) -> bool:
+    """从某域名的 Cookie 里删掉单个键（如失效的 ``sessionid``）。
+
+    CookieStore.removeCookie 只整体删除；这里按 key 修剪，用于「源规则执行
+    崩溃时作为最后手段丢弃本地残留登录态」的通用降级。返回是否真的有该键
+    被删除。``key`` 不区分大小写（Cookie 键通常大小写不敏感）。
+    """
+    domain = subdomain(url)
+    if not domain or not str(key or "").strip():
+        return False
+    lowered = str(key).strip().lower()
+    dropped: bool = False
+
+    def _trim(data: dict) -> None:
+        nonlocal dropped
+        cmap = cookie_to_map(str(data["cookies"].get(domain, "")))
+        hit = next((k for k in cmap if k.lower() == lowered), None)
+        if hit is None:
+            return
+        del cmap[hit]
+        data["cookies"][domain] = map_to_cookie(cmap) if cmap else ""
+        dropped = True
+
+    _mutate(_trim)
+    return dropped
+
+
 def cookie_to_map(cookie: str) -> dict[str, str]:
     """``a=1; b=2`` -> dict（CookieStore.cookieToMap）。"""
     out: dict[str, str] = {}

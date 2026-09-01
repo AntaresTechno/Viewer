@@ -421,6 +421,30 @@ def invalidate_explore_kinds(source: dict | None = None) -> None:
         _KINDS_CACHE.pop(key, None)
 
 
+_DOMAIN_RE = re.compile(r"https?://([^/\s,}]+)", re.IGNORECASE)
+
+
+def _source_domains(source: dict) -> set[str]:
+    """书源常用字段里出现的域名（去端口），用于发现页崩溃时的登录态清洗。
+
+    只收集书源自己声明的 url（bookSourceUrl / loginUrl / searchUrl /
+    exploreUrl / loginUi）里的主机名——通用、不点名具体源。取不到返回空集。
+    """
+    from . import source_state as _ss
+
+    text = " ".join(
+        str(source.get(k) or "")
+        for k in ("bookSourceUrl", "loginUrl", "searchUrl",
+                  "exploreUrl", "loginUi")
+    )
+    doms: set[str] = set()
+    for m in _DOMAIN_RE.finditer(text):
+        dom = _ss.subdomain(m.group(1))
+        if dom:
+            doms.add(dom)
+    return doms
+
+
 def _explore_kinds_uncached(source: dict) -> list[dict]:
     explore_url = source.get("exploreUrl")
     if not explore_url or not isinstance(explore_url, str) or not explore_url.strip():
@@ -429,7 +453,8 @@ def _explore_kinds_uncached(source: dict) -> list[dict]:
     rule_str: str = explore_url.strip()
     low = rule_str.lower()
     if low.startswith("<js>") or low.startswith("@js:"):
-        from .js_bridge import JavaBridge, eval_js
+        from . import source_state as _ss
+        from .js_bridge import JavaBridge, RuleJSError, eval_js
         from .source_bridge import InfoMapBridge, bridges_for
 
         ns = bridges_for(source)
@@ -440,14 +465,33 @@ def _explore_kinds_uncached(source: dict) -> list[dict]:
         # 发现页 JS 常直接 java.ajax(...) 预热榜单/分类（番茄书源即如此），
         # 这里必须是真 JavaBridge —— 传空壳会让 java.ajax 变成 undefined。
         base_url = str(source.get("bookSourceUrl") or "")
-        val = eval_js(
-            _kind_js_body(rule_str),
-            {"infoMap": {}, "source": source,
-             "baseUrl": base_url,
-             "__bridge__": JavaBridge(owner=None, base_url=base_url,
-                                      source=source),
-             "__ns__": ns},
-        )
+
+        def _run() -> Any:
+            return eval_js(
+                _kind_js_body(rule_str),
+                {"infoMap": {}, "source": source,
+                 "baseUrl": base_url,
+                 "__bridge__": JavaBridge(owner=None, base_url=base_url,
+                                          source=source),
+                 "__ns__": ns},
+            )
+
+        try:
+            val = _run()
+        except RuleJSError:
+            # 最后手段：发现 JS 崩溃可能源于本地残留的失效登录会话（书源把
+            # 非空 ck 当成已登录去读书架/个人中心，接口却按未登录回空——如
+            # 番茄的 book_shelf_info_all undefined）。不点名源：把该源自己
+            # 域名上的 sessionid 当作「本地残留登录态」清掉后重试一次。正常
+            # 源不触发；用户真实登录由服务端 Set-Cookie 重建，清洗不误伤。
+            dropped = [
+                dom for dom in sorted(_source_domains(source))
+                if _ss.remove_cookie_key(f"https://{dom}", "sessionid")
+            ]
+            if not dropped:
+                raise
+            # 第二次尝试直接透传异常（仍是 RuleJSError 或认证失败等）
+            val = _run()
         rule_str = "" if val is None else str(val)
 
     text = rule_str.strip()
