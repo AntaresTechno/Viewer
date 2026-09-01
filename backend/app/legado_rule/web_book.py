@@ -27,46 +27,19 @@ load_builtin()
 _LOG = logging.getLogger("viewer.legado.web_book")
 
 
-def _cookie_state(url: str) -> str:
-    """该域名当前是否已存 Cookie（登录态）——仅用于空响应时区分"没登录"与"被拒"。
-
-    只在 WARNING 分支调用，且读取失败不影响主流程。不点名任何具体键名，
-    对任何书源都只是"有没有 Cookie"这一层信息。
-    """
-    try:
-        from . import source_state
-
-        ck = source_state.get_cookie(url) or ""
-    except Exception:  # noqa: BLE001
-        return ""
-    return f" | cookie={'有' if ck.strip() else '空'}"
-
-
 def _log_list_response(source: dict, res: StrResponse, *, kind: str) -> None:
-    """请求级日志：最终 URL / HTTP 状态 / 响应长度，空响应高亮为 WARNING。
+    """请求级日志：最终 URL / HTTP 状态 / 响应长度。
 
-    空 body 是"<js> 列表规则 JSON.parse 炸成 unexpected end of input / 搜不到
-    东西"的常见根因（接口门禁、签名失败、限流都会回空）。这里把它显式打出来，
-    便于一眼分辨是"请求 URL 不对"还是"接口回空"。与书源无关，通用记录。
+    非空响应走 DEBUG；空响应（接口回空、被门禁/限流）只留一行简短 DEBUG，
+    不再打醒目标队 —— 番茄搜索这类「无会话回空 body」是常态，刷屏无益。
+    排查空响应时需开 DEBUG 级别看一次即可。
     """
     name = str(source.get("bookSourceName")
                or source.get("bookSourceUrl") or "")
     body = res.body or ""
     size = len(body)
-    if size and body.strip():
-        _LOG.debug("[books] %s 响应: source=%s status=%s bytes=%d url=%s",
-                   kind, name, res.status, size, res.url)
-        return
-    # 空/纯空白：WARNING（未配置 handler 时也会经 lastResort 输出到 stderr）
-    # 响应头里常有风控/限流线索（content-length、x-tt-logid 等），一并附上；
-    # 同时标注该域名是否已存登录态，用于区分"没登录"与"已登录但被拒"。
-    hdrs = res.headers or {}
-    summary = "; ".join(f"{k}={v}" for k, v in list(hdrs.items())[:12])
-    head_txt = f" | 响应头: {summary[:600]}" if summary else ""
-    _LOG.warning(
-        "[books] %s 响应为空: source=%s status=%s bytes=%d url=%s "
-        "-> 空 body 无法解析，已短路为空列表%s%s",
-        kind, name, res.status, size, res.url, head_txt, _cookie_state(res.url))
+    _LOG.debug("[books] %s 响应: source=%s status=%s bytes=%d url=%s",
+               kind, name, res.status, size, res.url)
 
 
 def _as_dict(value: Any) -> dict:
