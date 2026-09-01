@@ -79,13 +79,18 @@ onMounted(async () => {
   try {
     const r = await api.sourcesList();
     sources.value = r.items.filter((s) => s.enabled);
-    if (sources.value.length) await pickSource(sources.value[0].sourceUrl);
+    // 只列出并选中首个源，不自动加载分类 —— 分类由「加载分类」按钮手动触发，
+    // 避免每次进发现页就打一排重量级请求（番茄的 exploreUrl 会串 15s 预热）。
+    if (sources.value.length) {
+      selectSource(sources.value[0].sourceUrl);
+    }
   } catch (e) {
     error.value = errMsg(e);
   }
 });
 
-async function pickSource(url: string) {
+/** 选中源并清空旧状态；不自动拉取分类，由「加载分类」按钮触发。 */
+function selectSource(url: string) {
   activeSource.value = url;
   kinds.value = [];
   values.value = {};
@@ -94,7 +99,6 @@ async function pickSource(url: string) {
   error.value = "";
   logs.value = [];
   done.value = false;
-  await loadKinds(url);
 }
 
 async function loadKinds(url: string) {
@@ -238,13 +242,21 @@ async function openBook(b: BookResult) {
         :key="s.sourceUrl"
         class="chip"
         :class="{ selected: s.sourceUrl === activeSource }"
-        @click="pickSource(s.sourceUrl)"
+        @click="selectSource(s.sourceUrl)"
       >
         {{ s.sourceName || s.sourceUrl }}
       </button>
       <span v-if="!sources.length" class="none-src">
         没有启用的书源，请到 管理 → 书源管理 导入。
       </span>
+    </div>
+
+    <!-- 手动加载分类：进入页面 / 切换源都不自动拉，点按钮才请求 -->
+    <div
+      v-if="sources.length && activeSource && !kinds.length && !loadingKinds"
+      class="center load-row"
+    >
+      <MiuixButton @click="loadKinds(activeSource)">加载分类</MiuixButton>
     </div>
 
     <!-- 控件矩阵：按 legado 的 flex 算法排行，每行 6 格 -->
@@ -540,5 +552,8 @@ async function openBook(b: BookResult) {
   display: flex;
   justify-content: center;
   margin: 22px 0 6px;
+}
+.load-row {
+  margin: 14px 0 4px;
 }
 </style>
