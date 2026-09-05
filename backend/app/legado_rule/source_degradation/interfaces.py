@@ -34,3 +34,18 @@ class GuestReadAdapter(Protocol):
     def is_guest_chapter(
         self, source: dict[str, Any], chapter: dict[str, Any], ch_url: str
     ) -> bool: ...
+
+
+@runtime_checkable
+class SearchAdapter(Protocol):
+    """可选搜索能力：为无法稳定执行自身搜索规则的书源提供独立实现。
+
+    返回 ``None`` 表示本次不接管，调用方继续走通用 legado 规则；返回列表
+    （包括空列表）表示适配器已经完成本次搜索。
+    """
+
+    def matches_search(self, source: dict[str, Any]) -> bool: ...
+
+    async def search(
+        self, source: dict[str, Any], key: str, page: int
+    ) -> list[dict[str, Any]] | None: ...

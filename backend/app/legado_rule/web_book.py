@@ -17,7 +17,7 @@ from .analyze_url import AnalyzeUrl, get_absolute_url
 from .exceptions import FetchError, RuleError
 from .explore_ui import normalize_style
 from .net import StrResponse, fetch
-from .source_degradation import guest_reader_for, load_builtin
+from .source_degradation import guest_reader_for, load_builtin, searcher_for
 
 # Import/register bundled source-capability adapters (e.g. guest-read fallback).
 # The engine core only asks "is there an adapter for this source?" and never
@@ -299,6 +299,17 @@ def _parse_book_list(
 
 async def search_book(source: dict, key: str, page: int = 1,
                       explore_url: str | None = None) -> list[dict]:
+    # 来源专属的替代搜索通过能力注册表接入；核心流程不判断文件名、域名或
+    # 具体接口。适配器返回 None 时无缝回到 legado 通用规则。
+    if explore_url is None:
+        adapter = searcher_for(source)
+        if adapter is not None:
+            try:
+                adapted = await adapter.search(source, key, max(1, page))
+            except Exception:  # noqa: BLE001 - 降级失败不阻断原搜索链路
+                adapted = None
+            if adapted is not None:
+                return adapted
     search_url = explore_url if explore_url else source.get("searchUrl", "")
     if not search_url:
         raise RuleError("书源未配置搜索地址")

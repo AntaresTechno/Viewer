@@ -539,3 +539,73 @@ def test_fq_replace_cover_origin():
     # 已是 origin/https 直接透传
     direct = "https://p6-novel.byteimg.com/origin/novel-pic/abc"
     assert fq._fq_replace_cover(direct) == direct
+
+
+def test_fq_unsigned_search_payload_mapping():
+    """远端签名服务不可用时，免签接口仍能映射成统一搜索结果。"""
+    from app.legado_rule.source_degradation import fanqie as fq
+
+    payload = json.dumps({
+        "code": 0,
+        "data": {"ret_data": [{
+            "book_id": "7658604195917859902",
+            "title": "<em>庆余年</em>同人",
+            "author": "测试作者",
+            "category": "男频衍生",
+            "creation_status": "1",
+            "thumb_url": "https://img.example/cover.jpg",
+            "abstract": "简介",
+        }]},
+    }, ensure_ascii=False)
+    out = fq._fq_search_books(payload, SOURCE)
+    assert out is not None and len(out) == 1
+    assert out[0]["name"] == "庆余年同人"
+    assert out[0]["kind"] == "男频衍生, 连载"
+    assert out[0]["author"] == "测试作者"
+    assert out[0]["bookUrl"].endswith("book_id=7658604195917859902")
+    assert out[0]["origin"] == SOURCE["bookSourceUrl"]
+
+
+@pytest.mark.asyncio
+async def test_fq_search_uses_unsigned_paginated_endpoint(monkeypatch):
+    from app.legado_rule.source_degradation import fanqie as fq
+
+    seen: list[str] = []
+
+    async def fake_fetch(url: str):
+        seen.append(url)
+        return '{"code":0,"data":{"ret_data":[]}}'
+
+    monkeypatch.setattr(fq, "_fq_guest_fetch", fake_fetch)
+    assert await fq._fq_search(SOURCE, "s:庆余年", 3) == []
+    assert len(seen) == 1
+    assert "offset=20" in seen[0]
+    assert "%E5%BA%86%E4%BD%99%E5%B9%B4" in seen[0]
+    assert "sg.91loli.cc" not in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_search_adapter_isolated_from_generic_engine(monkeypatch):
+    """匹配适配器时不执行原签名规则；普通来源仍保持通用行为。"""
+    from app.legado_rule import web_book as wb
+
+    class FakeSearch:
+        async def search(self, source, key, page):
+            return [{"name": key, "page": page}]
+
+    async def must_not_fetch(*args, **kwargs):
+        raise AssertionError("generic signed search must not run")
+
+    monkeypatch.setattr(wb, "searcher_for", lambda source: FakeSearch())
+    monkeypatch.setattr(wb, "_fetch_book_list", must_not_fetch)
+    assert await wb.search_book(SOURCE, "庆余年", 2) == [
+        {"name": "庆余年", "page": 2}
+    ]
+
+
+def test_fq_search_adapter_can_be_disabled():
+    from app.legado_rule.source_degradation import searcher_for
+
+    source = dict(SOURCE)
+    source["extra"] = {"adapters": {"search": False}}
+    assert searcher_for(source) is None

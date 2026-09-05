@@ -1,10 +1,14 @@
-"""Fanqie (番茄小说) guest-read adapter.
+"""Fanqie (番茄小说) search and guest-read adapter.
 
 The fanqie reading API gates its detail/toc endpoints behind a login
 (returns a 200 empty body for an anonymous session), which breaks the generic
 rule pipeline's ``JSON.parse`` and leaves content empty. The source itself has
 visitor-usable web/relay endpoints; this adapter supplies them as a fallback so
 a device-only registration can still read free books' toc & content.
+
+Its configured search also depends on a third-party signing service. Search is
+served through Fanqie's unsigned mobile endpoint here, while ``id:`` lookups and
+unrecognized/error cases fall back to the source's original legado rules.
 
 This module is the *only* place that may mention fanqie/byteimg domains. The
 engine core talks to it solely through ``GuestReadAdapter``.
@@ -15,9 +19,9 @@ import html as html_mod
 import json
 import re
 from typing import Any
+from urllib.parse import urlencode
 
 from ..net import fetch
-from .interfaces import GuestReadAdapter
 from .registry import register
 
 _DOMAINS = ("reading.snssdk.com", "snssdk.com", "fanqienovel.com")
@@ -26,6 +30,11 @@ _GUEST_UA = "Mozilla/5.0 (legado) Chrome/120.0.0.0"
 # Guest-degraded toc chapters carry their itemId bare (a pure digit url);
 # the API-rebuilt chapter dict drops the `_fq_*` marker, so match by shape.
 _ITEM_ID_RE = re.compile(r"^\d{6,}$")
+_SEARCH_ENDPOINT = (
+    "https://novel.snssdk.com/api/novel/channel/homepage/"
+    "search/search/v1/"
+)
+_SEARCH_PAGE_SIZE = 10
 
 
 def _fq_domain(url: str) -> bool:
@@ -80,6 +89,75 @@ async def _fq_guest_fetch(url: str) -> str | None:
     if resp.error or not (resp.body or "").strip():
         return None
     return resp.body
+
+
+def _fq_search_books(
+    payload: str, source: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    """把免签搜索接口映射成引擎统一 BookList；协议异常时返回 None。"""
+    try:
+        root = json.loads(payload)
+        if root.get("code") != 0 or not isinstance(root.get("data"), dict):
+            return None
+        rows = root["data"].get("ret_data")
+        if not isinstance(rows, list):
+            return None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+    books: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        book_id = str(row.get("book_id") or "").strip()
+        name = re.sub(r"</?em>", "", str(row.get("title") or ""),
+                      flags=re.IGNORECASE).strip()
+        if not book_id or not name:
+            continue
+        status = {"0": "完结", "1": "连载", "4": "断更", "-1": "未知"}.get(
+            str(row.get("creation_status") or ""), ""
+        )
+        category = str(row.get("category") or "").strip()
+        kind = ", ".join(x for x in (category, status) if x)
+        books.append({
+            "name": name,
+            "author": str(row.get("author") or "").strip(),
+            "kind": kind,
+            "wordCount": str(row.get("word_number") or "").strip(),
+            "intro": str(row.get("abstract") or "").strip(),
+            "coverUrl": str(row.get("thumb_url") or "").strip(),
+            "lastChapter": "",
+            "bookUrl": (
+                "https://reading.snssdk.com/reading/bookapi/detail/v/"
+                f"?book_id={book_id}"
+            ),
+            "origin": source.get("bookSourceUrl", ""),
+            "originName": source.get("bookSourceName", ""),
+        })
+    return books
+
+
+async def _fq_search(
+    source: dict[str, Any], key: str, page: int
+) -> list[dict[str, Any]] | None:
+    query = str(key or "").strip()
+    # id: 搜索由原配置直接走详情规则，不应被关键词接口接管。
+    if not query or query.lower().startswith("id:"):
+        return None
+    query = re.sub(r"^[smtd]:", "", query, flags=re.IGNORECASE).strip()
+    if not query:
+        return []
+    params = urlencode({
+        "device_platform": "android",
+        "parent_enterfrom": "novel_channel_search.tab.",
+        "offset": (max(1, page) - 1) * _SEARCH_PAGE_SIZE,
+        "aid": "1967",
+        "q": query,
+    })
+    body = await _fq_guest_fetch(f"{_SEARCH_ENDPOINT}?{params}")
+    if body is None:
+        return None
+    return _fq_search_books(body, source)
 
 
 async def _fq_guest_cover(source: dict[str, Any], book_url: str) -> str | None:
@@ -177,8 +255,8 @@ async def _fq_guest_content(item_id: str) -> str | None:
     return None
 
 
-class FanqieGuestReadAdapter:
-    """Guest-read fallback for fanqie-domain sources (self-registered)."""
+class FanqieAdapter:
+    """Search and guest-read capabilities for fanqie-domain sources."""
 
     def matches(self, source: dict[str, Any]) -> bool:
         if not _fq_domain(str(source.get("bookSourceUrl") or "")):
@@ -189,6 +267,19 @@ class FanqieGuestReadAdapter:
             if isinstance(adapters, dict) and "guestRead" in adapters:
                 return bool(adapters["guestRead"])
         return True  # default on: keeps legacy behaviour for fanqie sources
+
+    def matches_search(self, source: dict[str, Any]) -> bool:
+        if not _fq_domain(str(source.get("bookSourceUrl") or "")):
+            return False
+        extra = source.get("extra")
+        if isinstance(extra, dict):
+            adapters = extra.get("adapters")
+            if isinstance(adapters, dict) and "search" in adapters:
+                return bool(adapters["search"])
+        return True
+
+    async def search(self, source, key, page):
+        return await _fq_search(source, key, page)
 
     async def guest_cover(self, source, book_url):
         return await _fq_guest_cover(source, book_url)
@@ -208,4 +299,4 @@ class FanqieGuestReadAdapter:
         )
 
 
-register(FanqieGuestReadAdapter())
+register(FanqieAdapter())
