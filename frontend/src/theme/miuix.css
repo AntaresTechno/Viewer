@@ -1,0 +1,39 @@
+/* Miuix implementation of the app theme contract. Vendor colors remain native. */
+html[data-design="miuix"] {
+  --app-font:
+    -apple-system,
+    "HarmonyOS Sans SC",
+    "MiSans",
+    "Segoe UI",
+    system-ui,
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
+
+  --app-shape-lg: 16px;
+  --app-shape-xl: 20px;
+  --app-shape-2xl: 24px;
+  --app-radius-card: 16px;
+  --app-radius-input: 12px;
+  --app-radius-lg: 20px;
+  --app-radius-xl: 24px;
+  --app-cover-radius: 12px;
+
+  --app-shadow-card: none;
+  --app-shadow-card-hover: 0 6px 18px rgb(0 0 0 / 10%);
+  --app-shadow-pop: 0 8px 28px rgb(0 0 0 / 14%);
+
+  --app-nav-rail-container: color-mix(in srgb, var(--m-color-surface-container) 55%, transparent);
+  --app-nav-active-container: var(--m-color-secondary-container);
+  --app-nav-active-foreground: var(--m-color-on-secondary-container);
+  --app-nav-item-height: 38px;
+  --app-chrome-background: color-mix(in srgb, var(--m-color-surface) 72%, transparent);
+  --app-chrome-filter: blur(20px) saturate(160%);
+  --app-chrome-edge: color-mix(in srgb, var(--m-color-on-surface) 7%, transparent);
+  --app-popover-background: color-mix(in srgb, var(--m-color-surface-container) 88%, transparent);
+  --app-popover-filter: blur(24px) saturate(160%);
+}
+
+html[data-design="miuix"].m-theme-dark {
+  color-scheme: dark;
+}

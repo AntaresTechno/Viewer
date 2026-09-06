@@ -87,6 +87,31 @@ def test_search_list_items_use_jslib_fields():
     assert books[1]["coverUrl"] == "https://img.example.com/200.jpg"
 
 
+def test_book_list_reuses_one_analyzer_for_all_items(monkeypatch):
+    """BookList 与 Legado 一致复用解析器，避免每本书重载整份 jsLib。"""
+    from app.legado_rule import web_book
+
+    created = 0
+    original = web_book.AnalyzeRule
+
+    class CountingAnalyzeRule(original):
+        def __init__(self, *args, **kwargs):
+            nonlocal created
+            created += 1
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(web_book, "AnalyzeRule", CountingAnalyzeRule)
+    books = web_book._parse_book_list(
+        SOURCE_WITH_JSLIB,
+        RULES,
+        "https://www.example.com/search",
+        LIST_HTML,
+        is_search=True,
+    )
+    assert len(books) == 2
+    assert created == 1
+
+
 def test_search_redirect_to_info_page_via_book_url_pattern():
     src = dict(SOURCE_WITH_JSLIB)
     src["ruleBookInfo"] = {

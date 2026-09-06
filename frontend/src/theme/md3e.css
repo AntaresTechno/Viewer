@@ -1,0 +1,249 @@
+/*
+ * Material 3 Expressive implementation.
+ *
+ * Color roles, shape scale, type scale and motion are exposed as app semantics.
+ * The palette is intentionally product-specific; component behavior follows M3E.
+ */
+html[data-design="md3e"] {
+  color-scheme: light;
+
+  /* Primary */
+  --m-color-primary: #5b57d9;
+  --m-color-on-primary: #ffffff;
+  --m-color-primary-variant: #5b57d9;
+  --m-color-on-primary-variant: #e5dfff;
+  --m-color-primary-container: #e5dfff;
+  --m-color-on-primary-container: #19115f;
+
+  /* Secondary */
+  --m-color-secondary: #625b71;
+  --m-color-on-secondary: #ffffff;
+  --m-color-secondary-variant: #e8def8;
+  --m-color-on-secondary-variant: #494453;
+  --m-color-secondary-container: #e8def8;
+  --m-color-on-secondary-container: #1d192b;
+  --m-color-secondary-container-variant: #ddd1ef;
+  --m-color-on-secondary-container-variant: #332d41;
+
+  /* Tertiary gives expressive moments a warmer counterpoint. */
+  --m-color-tertiary: #8a4a5f;
+  --m-color-on-tertiary: #ffffff;
+  --m-color-tertiary-container: #ffd9e2;
+  --m-color-on-tertiary-container: #3a071d;
+  --m-color-tertiary-container-variant: #f5cad7;
+  --m-color-on-tertiary-container-variant: #572235;
+
+  /* Error */
+  --m-color-error: #ba1a1a;
+  --m-color-on-error: #ffffff;
+  --m-color-error-container: #ffdad6;
+  --m-color-on-error-container: #410002;
+
+  /* Neutral surface hierarchy */
+  --m-color-background: #fdf8ff;
+  --m-color-on-background: #1c1b20;
+  --m-color-on-background-variant: #49454f;
+  --m-color-surface: #fdf8ff;
+  --m-color-on-surface: #1c1b20;
+  --m-color-on-surface-variant: #49454f;
+  --m-color-surface-variant: #e7e0ec;
+  --m-color-surface-container-lowest: #ffffff;
+  --m-color-surface-container: #f3edf7;
+  --m-color-surface-container-variant: #eee8f2;
+  --m-color-surface-container-high: #ede7f1;
+  --m-color-surface-container-highest: #e7e0eb;
+  --m-color-on-surface-container: #1c1b20;
+  --m-color-on-surface-container-high: #1c1b20;
+  --m-color-on-surface-container-highest: #1c1b20;
+  --m-color-on-surface-secondary: #625d68;
+  --m-color-on-surface-variant-summary: #625d68;
+  --m-color-on-surface-variant-actions: #4f46c7;
+  --m-color-outline: #79747e;
+  --m-color-outline-variant: #cac4d0;
+  --m-color-divider-line: #ddd6e2;
+
+  /* Disabled roles expected by miuix-vue. */
+  --m-color-disabled-primary: #cbc5d5;
+  --m-color-disabled-on-primary: #7c7782;
+  --m-color-disabled-primary-button: #cbc5d5;
+  --m-color-disabled-on-primary-button: #7c7782;
+  --m-color-disabled-primary-slider: #b8b2c2;
+  --m-color-disabled-secondary: #e7e0ea;
+  --m-color-disabled-on-secondary: #9b959f;
+  --m-color-disabled-secondary-variant: #e7e0ea;
+  --m-color-disabled-on-secondary-variant: #9b959f;
+  --m-color-disabled-error: #e9c7c4;
+
+  --m-icon-button-bg: transparent;
+  --m-fab-color: var(--m-color-primary-container);
+  --m-card-color: var(--m-color-surface-container-lowest);
+
+  /* M3E shape scale */
+  --app-shape-xs: 4px;
+  --app-shape-sm: 8px;
+  --app-shape-md: 12px;
+  --app-shape-lg: 16px;
+  --app-shape-lg-increased: 20px;
+  --app-shape-xl: 28px;
+  --app-shape-2xl: 32px;
+  --app-shape-full: 999px;
+  --app-radius-card: var(--app-shape-lg-increased);
+  --app-radius-input: var(--app-shape-lg);
+  --app-radius-lg: var(--app-shape-xl);
+  --app-radius-xl: var(--app-shape-2xl);
+  --app-cover-radius: var(--app-shape-lg);
+
+  --app-font:
+    "Roboto Flex",
+    "MiSans VF",
+    "MiSans",
+    "HarmonyOS Sans SC",
+    "Segoe UI Variable",
+    system-ui,
+    -apple-system,
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
+  --app-type-page-size: clamp(1.9rem, 3vw, 2.5rem);
+  --app-type-page-leading: 1.08;
+  --app-type-page-tracking: -0.035em;
+  --app-type-page-weight: 720;
+
+  /* Expressive spatial motion is fast and slightly springy; effects stay calm. */
+  --app-dur-instant: 90ms;
+  --app-dur-micro: 160ms;
+  --app-dur-calm: 400ms;
+  --app-dur-spring: 500ms;
+
+  /* Low elevation + tonal containment. */
+  --app-shadow-card: 0 1px 2px rgb(44 38 57 / 7%);
+  --app-shadow-card-hover:
+    0 2px 4px rgb(44 38 57 / 8%),
+    0 12px 28px rgb(44 38 57 / 12%);
+  --app-shadow-pop:
+    0 2px 6px rgb(44 38 57 / 10%),
+    0 18px 48px rgb(44 38 57 / 18%);
+
+  /* Shell/application semantics. */
+  --app-nav-rail-container: color-mix(in srgb, var(--m-color-surface-container) 92%, transparent);
+  --app-nav-active-container: var(--m-color-secondary-container);
+  --app-nav-active-foreground: var(--m-color-on-secondary-container);
+  --app-nav-item-height: 48px;
+  --app-chrome-background: color-mix(in srgb, var(--m-color-surface) 78%, transparent);
+  --app-chrome-filter: blur(24px) saturate(135%);
+  --app-chrome-edge: color-mix(in srgb, var(--m-color-outline-variant) 70%, transparent);
+  --app-popover-background: color-mix(in srgb, var(--m-color-surface-container-high) 88%, transparent);
+  --app-popover-filter: blur(28px) saturate(135%);
+  --app-segment-track: var(--m-color-surface-container-high);
+  --app-segment-thumb: var(--m-color-secondary-container);
+  --app-segment-thumb-foreground: var(--m-color-on-secondary-container);
+
+  --app-auth-orb-primary: radial-gradient(
+    circle at 35% 35%,
+    color-mix(in srgb, var(--m-color-primary-container) 88%, transparent),
+    transparent 68%
+  );
+  --app-auth-orb-tertiary: radial-gradient(
+    circle at 60% 60%,
+    color-mix(in srgb, var(--m-color-tertiary-container) 84%, transparent),
+    transparent 66%
+  );
+  --app-auth-panel-background: color-mix(in srgb, var(--m-color-surface-container-lowest) 82%, transparent);
+  --app-auth-panel-filter: blur(26px) saturate(130%);
+  --app-auth-panel-border: color-mix(in srgb, var(--m-color-outline-variant) 72%, transparent);
+}
+
+html[data-design="md3e"].m-theme-dark {
+  color-scheme: dark;
+
+  --m-color-primary: #c5c0ff;
+  --m-color-on-primary: #2c2589;
+  --m-color-primary-variant: #c5c0ff;
+  --m-color-on-primary-variant: #4640af;
+  --m-color-primary-container: #433ca8;
+  --m-color-on-primary-container: #e5dfff;
+
+  --m-color-secondary: #cbc2db;
+  --m-color-on-secondary: #332d41;
+  --m-color-secondary-variant: #4a4458;
+  --m-color-on-secondary-variant: #e8def8;
+  --m-color-secondary-container: #4a4458;
+  --m-color-on-secondary-container: #e8def8;
+  --m-color-secondary-container-variant: #554f63;
+  --m-color-on-secondary-container-variant: #eee5fb;
+
+  --m-color-tertiary: #f2b8c6;
+  --m-color-on-tertiary: #4b172a;
+  --m-color-tertiary-container: #673044;
+  --m-color-on-tertiary-container: #ffd9e2;
+  --m-color-tertiary-container-variant: #733b4f;
+  --m-color-on-tertiary-container-variant: #ffe0e7;
+
+  --m-color-error: #ffb4ab;
+  --m-color-on-error: #690005;
+  --m-color-error-container: #93000a;
+  --m-color-on-error-container: #ffdad6;
+
+  --m-color-background: #141318;
+  --m-color-on-background: #e6e1e9;
+  --m-color-on-background-variant: #cac4d0;
+  --m-color-surface: #141318;
+  --m-color-on-surface: #e6e1e9;
+  --m-color-on-surface-variant: #cac4d0;
+  --m-color-surface-variant: #49454f;
+  --m-color-surface-container-lowest: #0f0d13;
+  --m-color-surface-container: #211f26;
+  --m-color-surface-container-variant: #26232b;
+  --m-color-surface-container-high: #2b2930;
+  --m-color-surface-container-highest: #36343b;
+  --m-color-on-surface-container: #e6e1e9;
+  --m-color-on-surface-container-high: #e6e1e9;
+  --m-color-on-surface-container-highest: #e6e1e9;
+  --m-color-on-surface-secondary: #cac4d0;
+  --m-color-on-surface-variant-summary: #cac4d0;
+  --m-color-on-surface-variant-actions: #c5c0ff;
+  --m-color-outline: #948f99;
+  --m-color-outline-variant: #49454f;
+  --m-color-divider-line: #39353e;
+
+  --m-color-disabled-primary: #45424c;
+  --m-color-disabled-on-primary: #85818b;
+  --m-color-disabled-primary-button: #45424c;
+  --m-color-disabled-on-primary-button: #85818b;
+  --m-color-disabled-primary-slider: #514d59;
+  --m-color-disabled-secondary: #302d35;
+  --m-color-disabled-on-secondary: #6f6b75;
+  --m-color-disabled-secondary-variant: #302d35;
+  --m-color-disabled-on-secondary-variant: #6f6b75;
+  --m-color-disabled-error: #5b3d3b;
+
+  --m-fab-color: var(--m-color-primary-container);
+  --m-card-color: var(--m-color-surface-container-lowest);
+  --app-shadow-card: 0 1px 2px rgb(0 0 0 / 28%);
+  --app-shadow-card-hover:
+    0 2px 4px rgb(0 0 0 / 28%),
+    0 14px 30px rgb(0 0 0 / 32%);
+  --app-shadow-pop:
+    0 3px 8px rgb(0 0 0 / 36%),
+    0 20px 56px rgb(0 0 0 / 42%);
+}
+
+@media (prefers-contrast: more) {
+  html[data-design="md3e"] {
+    --m-color-outline: var(--m-color-on-surface);
+    --m-color-divider-line: var(--m-color-outline);
+    --app-chrome-background: var(--m-color-surface);
+    --app-popover-background: var(--m-color-surface-container-highest);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html[data-design="md3e"] {
+    --app-chrome-background: var(--m-color-surface);
+    --app-chrome-filter: none;
+    --app-popover-background: var(--m-color-surface-container-high);
+    --app-popover-filter: none;
+    --app-auth-panel-background: var(--m-color-surface-container-lowest);
+    --app-auth-panel-filter: none;
+  }
+}

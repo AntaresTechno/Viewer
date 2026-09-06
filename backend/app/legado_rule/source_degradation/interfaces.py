@@ -49,3 +49,18 @@ class SearchAdapter(Protocol):
     async def search(
         self, source: dict[str, Any], key: str, page: int
     ) -> list[dict[str, Any]] | None: ...
+
+
+@runtime_checkable
+class ExploreParserAdapter(Protocol):
+    """可选发现解析能力：快速解析已下载的列表响应。
+
+    返回 ``None`` 表示响应结构不认识，调用方必须回退书源原有规则；返回
+    列表（包括空列表）表示适配器已完成解析。
+    """
+
+    def matches_explore(self, source: dict[str, Any]) -> bool: ...
+
+    def parse_explore(
+        self, source: dict[str, Any], payload: str, base_url: str
+    ) -> list[dict[str, Any]] | None: ...

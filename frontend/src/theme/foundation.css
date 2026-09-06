@@ -1,0 +1,179 @@
+/* App-level theme contract. No design-system or page-specific selectors here. */
+:root {
+  color-scheme: light;
+
+  /* Motion: calm is the default; expressive is reserved for direct interaction. */
+  --app-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --app-ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --app-ease-calm: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --app-ease-spring: cubic-bezier(0.3, 1.12, 0.4, 1);
+  --app-dur-instant: 100ms;
+  --app-dur-micro: 180ms;
+  --app-dur-calm: 420ms;
+  --app-dur-spring: 520ms;
+
+  /* Semantic color bridge. Theme implementations provide the --m-* roles. */
+  --app-color-canvas: var(--m-color-background);
+  --app-color-surface: var(--m-color-surface);
+  --app-color-surface-low: var(--m-color-surface-container);
+  --app-color-surface-high: var(--m-color-surface-container-high);
+  --app-color-surface-highest: var(--m-color-surface-container-highest);
+  --app-color-text: var(--m-color-on-surface);
+  --app-color-text-muted: var(--m-color-on-surface-secondary);
+  --app-color-primary: var(--m-color-primary);
+  --app-color-on-primary: var(--m-color-on-primary);
+  --app-color-primary-container: var(--m-color-primary-container);
+  --app-color-on-primary-container: var(--m-color-on-primary-container);
+  --app-color-secondary-container: var(--m-color-secondary-container);
+  --app-color-on-secondary-container: var(--m-color-on-secondary-container);
+  --app-color-outline: var(--m-color-outline);
+  --app-color-divider: var(--m-color-divider-line);
+  --app-color-error: var(--m-color-error);
+
+  /* Defaults are deliberately neutral; each design may override them. */
+  --app-shape-xs: 4px;
+  --app-shape-sm: 8px;
+  --app-shape-md: 12px;
+  --app-shape-lg: 16px;
+  --app-shape-xl: 24px;
+  --app-shape-2xl: 28px;
+  --app-shape-full: 999px;
+  --app-radius-card: var(--app-shape-lg);
+  --app-radius-input: var(--app-shape-md);
+  --app-radius-lg: var(--app-shape-xl);
+  --app-radius-xl: var(--app-shape-2xl);
+
+  --app-type-page-size: clamp(1.5rem, 2vw, 1.75rem);
+  --app-type-page-leading: 1.18;
+  --app-type-page-tracking: -0.02em;
+  --app-type-page-weight: 700;
+
+  --app-shadow-card: none;
+  --app-shadow-card-hover: 0 6px 18px rgb(0 0 0 / 12%);
+  --app-shadow-pop: 0 12px 32px rgb(0 0 0 / 16%);
+
+  --app-nav-rail-container: var(--app-color-surface-low);
+  --app-nav-active-container: var(--app-color-secondary-container);
+  --app-nav-active-foreground: var(--app-color-on-secondary-container);
+  --app-nav-item-height: 40px;
+  --app-chrome-background: var(--app-color-surface);
+  --app-chrome-filter: none;
+  --app-chrome-edge: var(--app-color-divider);
+  --app-popover-background: var(--app-color-surface-high);
+  --app-popover-filter: none;
+  --app-segment-track: var(--app-color-surface-high);
+  --app-segment-thumb: var(--app-color-surface);
+  --app-segment-thumb-foreground: var(--app-color-text);
+  --app-cover-radius: var(--app-shape-md);
+
+  --app-auth-orb-primary: transparent;
+  --app-auth-orb-tertiary: transparent;
+  --app-auth-panel-background: var(--m-card-color, var(--app-color-surface));
+  --app-auth-panel-filter: none;
+  --app-auth-panel-border: transparent;
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    /* Critically damped: general navigation and non-gesture state changes. */
+    --app-ease-calm: linear(
+      0, 0.0403, 0.1319, 0.244, 0.3589, 0.467, 0.5634, 0.6466,
+      0.7168, 0.7748, 0.8222, 0.8604, 0.8909, 0.9151, 0.9342,
+      0.9492, 0.9609, 0.97, 0.977, 0.9824, 1
+    );
+    /* Slightly under-damped: press, selection and direct manipulation only. */
+    --app-ease-spring: linear(
+      0, 0.0618, 0.2009, 0.3664, 0.5276, 0.6685, 0.7825, 0.8689,
+      0.9308, 0.9722, 0.9979, 1.0121, 1.0185, 1.0199, 1.0184,
+      1.0156, 1.0122, 1.0091, 1.0063, 1.0041, 1.0024, 1.0013,
+      1.0005, 1
+    );
+  }
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--app-color-canvas);
+  color: var(--app-color-text);
+}
+
+body {
+  font-family: var(--app-font, "Segoe UI", system-ui, sans-serif);
+  font-optical-sizing: auto;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  color: var(--m-color-on-surface-variant-actions, var(--app-color-primary));
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--app-color-primary) 82%, white);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--app-color-primary-container);
+  color: var(--app-color-on-primary-container);
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 300ms;
+  animation-timing-function: var(--app-ease-calm);
+}
+
+html.vt-circle ::view-transition-old(root),
+html.vt-circle ::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+html.vt-circle ::view-transition-new(root) {
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --app-dur-calm: 150ms;
+    --app-dur-spring: 150ms;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 150ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :focus-visible {
+    outline-color: CanvasText;
+    outline-width: 3px;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+}

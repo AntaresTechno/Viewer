@@ -392,17 +392,18 @@ function onConnVisibility() {
         :class="{ active: it.active }"
         @click="go(it.to)"
       >
-        <svg
-          class="nic"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-          v-html="ICONS[it.icon]"
-        ></svg>
+        <span class="tab-icon" aria-hidden="true">
+          <svg
+            class="nic"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            v-html="ICONS[it.icon]"
+          ></svg>
+        </span>
         <span>{{ it.label }}</span>
       </button>
     </nav>
@@ -431,8 +432,10 @@ function onConnVisibility() {
    * 整体压过弹层。给整条侧栏一个显式层级，让弹层盖住内容区，
    * 同时仍低于 tabbar / miuix 弹窗的 800 层。 */
   z-index: 60;
-  border-right: 1px solid color-mix(in srgb, var(--m-color-on-surface) 7%, transparent);
-  background: color-mix(in srgb, var(--m-color-surface-container) 55%, transparent);
+  border-right: 1px solid var(--app-chrome-edge);
+  background: var(--app-nav-rail-container);
+  -webkit-backdrop-filter: var(--app-chrome-filter);
+  backdrop-filter: var(--app-chrome-filter);
 }
 .brand {
   display: flex;
@@ -447,9 +450,9 @@ function onConnVisibility() {
 .logo {
   width: 34px;
   height: 34px;
-  border-radius: 11px;
-  background: var(--m-color-primary);
-  color: var(--m-color-on-primary);
+  border-radius: var(--app-shape-md);
+  background: var(--app-color-primary-container);
+  color: var(--app-color-on-primary-container);
   font-weight: 700;
   display: grid;
   place-items: center;
@@ -460,7 +463,7 @@ function onConnVisibility() {
   font-weight: 700;
   font-size: 16px;
   letter-spacing: -0.01em;
-  color: var(--m-color-on-surface);
+  color: var(--app-color-text);
 }
 
 .rail-nav {
@@ -476,7 +479,7 @@ function onConnVisibility() {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
-  color: var(--m-color-on-surface-secondary);
+  color: var(--app-color-text-muted);
   padding: 14px 14px 5px;
   user-select: none;
 }
@@ -484,16 +487,16 @@ function onConnVisibility() {
   position: absolute;
   top: 0;
   left: 0;
-  border-radius: 999px;
-  background: var(--m-color-secondary-container);
+  border-radius: var(--app-shape-full);
+  background: var(--app-nav-active-container);
   pointer-events: none;
   will-change: transform, width, height;
 }
 .rail-thumb.anim {
   transition:
-    transform 0.55s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)),
-    width 0.55s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)),
-    height 0.55s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+    transform var(--app-dur-spring) var(--app-ease-spring),
+    width var(--app-dur-spring) var(--app-ease-spring),
+    height var(--app-dur-spring) var(--app-ease-spring);
 }
 @media (prefers-reduced-motion: reduce) {
   .rail-thumb.anim {
@@ -510,13 +513,13 @@ function onConnVisibility() {
   border: 0;
   background: transparent;
   padding: 0 14px;
-  height: 38px;
+  height: var(--app-nav-item-height);
   cursor: pointer;
   text-align: left;
   font-family: inherit;
   font-size: 14px;
-  color: var(--m-color-on-surface-secondary);
-  border-radius: 999px;
+  color: var(--app-color-text-muted);
+  border-radius: var(--app-shape-full);
 }
 .nic {
   width: 19px;
@@ -526,10 +529,10 @@ function onConnVisibility() {
 @media (prefers-reduced-motion: no-preference) {
   .nic,
   .rail-item .pill {
-    transition: transform 0.35s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+    transition: transform var(--app-dur-calm) var(--app-ease-spring);
   }
   .rail-item:not(.active):hover {
-    background: color-mix(in srgb, var(--m-color-on-surface) 5%, transparent);
+    background: color-mix(in srgb, var(--app-color-text) 6%, transparent);
   }
   .rail-item:active .pill {
     transform: scale(0.97);
@@ -539,13 +542,13 @@ function onConnVisibility() {
   }
 }
 .rail-item.active {
-  color: var(--m-color-on-secondary-container);
-  font-weight: 600;
+  color: var(--app-nav-active-foreground);
+  font-weight: 650;
 }
 
 /* 用户卡 + 身份操作：按钮一排在上，用户卡独占最底一行 */
 .rail-foot {
-  border-top: 1px solid color-mix(in srgb, var(--m-color-on-surface) 7%, transparent);
+  border-top: 1px solid var(--app-chrome-edge);
   padding-top: 10px;
   display: flex;
   flex-direction: column;
@@ -667,18 +670,18 @@ function onConnVisibility() {
   min-width: 280px;
   padding: 16px;
   border-radius: 20px;
-  background: color-mix(in srgb, var(--m-color-surface-container) 88%, transparent);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
-  backdrop-filter: blur(24px) saturate(160%);
+  background: var(--app-popover-background);
+  -webkit-backdrop-filter: var(--app-popover-filter);
+  backdrop-filter: var(--app-popover-filter);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.18),
     var(--app-shadow-pop, 0 10px 32px rgba(0, 0, 0, 0.18));
-  border: 1px solid color-mix(in srgb, var(--m-color-outline) 40%, transparent);
+  border: 1px solid var(--app-chrome-edge);
   transform-origin: left bottom;
 }
 @media (prefers-reduced-transparency: reduce) {
   .appearance-pop {
-    background: var(--m-color-surface-container);
+    background: var(--app-color-surface-high);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
@@ -725,20 +728,11 @@ function onConnVisibility() {
 /* 底部标签栏的降级与动效（顶层书写，避免嵌套媒体查询兼容问题） */
 @media (max-width: 860px) and (prefers-reduced-transparency: reduce) {
   .tabbar {
-    background: var(--m-color-surface);
+    background: var(--app-color-surface);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
 }
-@media (max-width: 860px) and (prefers-reduced-motion: no-preference) {
-  .tab-item {
-    transition: transform 0.35s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
-  }
-  .tab-item:active {
-    transform: scale(0.92);
-  }
-}
-
 @media (max-width: 860px) {
   .shell {
     flex-direction: column;
@@ -763,10 +757,10 @@ function onConnVisibility() {
     display: flex;
     justify-content: space-around;
     padding: 6px 8px max(8px, env(safe-area-inset-bottom));
-    background: color-mix(in srgb, var(--m-color-surface) 78%, transparent);
-    -webkit-backdrop-filter: blur(24px) saturate(160%);
-    backdrop-filter: blur(24px) saturate(160%);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--m-color-on-surface) 7%, transparent);
+    background: var(--app-chrome-background);
+    -webkit-backdrop-filter: var(--app-chrome-filter);
+    backdrop-filter: var(--app-chrome-filter);
+    box-shadow: inset 0 1px 0 var(--app-chrome-edge);
   }
   .tab-item {
     flex: 1;
@@ -780,17 +774,35 @@ function onConnVisibility() {
     cursor: pointer;
     font-family: inherit;
     font-size: 10.5px;
-    color: var(--m-color-on-surface-secondary);
+    color: var(--app-color-text-muted);
     padding: 5px 0 3px;
-    border-radius: 12px;
+    border-radius: var(--app-shape-lg);
   }
-  .tab-item .nic {
+  .tab-icon {
+    width: 64px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--app-shape-full);
+    transition:
+      border-radius var(--app-dur-spring) var(--app-ease-spring),
+      transform var(--app-dur-instant) var(--app-ease-calm),
+      background-color var(--app-dur-micro) linear;
+  }
+  .tab-icon .nic {
     width: 23px;
     height: 23px;
   }
   .tab-item.active {
-    color: var(--m-color-primary);
-    font-weight: 600;
+    color: var(--app-nav-active-foreground);
+    font-weight: 650;
+  }
+  .tab-item.active .tab-icon {
+    background: var(--app-nav-active-container);
+  }
+  .tab-item:active .tab-icon {
+    border-radius: var(--app-shape-md);
+    transform: scale(0.92);
   }
 }
 </style>

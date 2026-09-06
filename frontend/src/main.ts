@@ -5,7 +5,7 @@ import router from "./router";
 import { useThemeStore } from "@/stores/theme";
 
 import "miuix-vue/style.css";
-import "./theme/design.css"; // miuix / md3e 双设计 token + 组件形制覆盖
+import "./theme/design.css"; // 分层主题入口：contract / implementations / vendor adapter
 import "./styles/base.css"; // 共享工具类
 
 const pinia = createPinia();

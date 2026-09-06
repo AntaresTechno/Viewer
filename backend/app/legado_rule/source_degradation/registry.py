@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .interfaces import GuestReadAdapter, SearchAdapter
+    from .interfaces import ExploreParserAdapter, GuestReadAdapter, SearchAdapter
 
 _registry: list[Any] = []
 
@@ -46,6 +46,22 @@ def searcher_for(source: dict[str, Any]) -> "SearchAdapter | None":
             ):
                 return adapter
         except Exception:  # noqa: BLE001 - 匹配器异常不能拖垮通用搜索
+            continue
+    return None
+
+
+def explore_parser_for(source: dict[str, Any]) -> "ExploreParserAdapter | None":
+    """首个可快速解析该书源发现响应的适配器。"""
+    from .interfaces import ExploreParserAdapter
+
+    for adapter in _registry:
+        try:
+            if (
+                isinstance(adapter, ExploreParserAdapter)
+                and adapter.matches_explore(source)
+            ):
+                return adapter
+        except Exception:  # noqa: BLE001 - 适配失败必须保留原规则回退
             continue
     return None
 

@@ -117,11 +117,11 @@
  * 层级由 字重 + 字号 + 行高 共同承担。 */
 .page-title {
   margin: 4px 0 14px;
-  font-size: 23px;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-  font-weight: 700;
-  color: var(--m-color-on-surface);
+  font-size: var(--app-type-page-size);
+  line-height: var(--app-type-page-leading);
+  letter-spacing: var(--app-type-page-tracking);
+  font-weight: var(--app-type-page-weight);
+  color: var(--app-color-text);
 }
 
 .center {
@@ -177,7 +177,7 @@
   align-items: center;
   gap: 6px;
   padding: 4px 12px;
-  border-radius: 999px;
+  border-radius: var(--app-shape-full);
   border: 1px solid var(--m-color-outline);
   color: var(--m-color-on-surface-secondary);
   font-size: 13px;
@@ -312,7 +312,7 @@ textarea:focus {
   position: relative;
   aspect-ratio: 2 / 3;
   width: 100%;
-  border-radius: 12px;
+  border-radius: var(--app-cover-radius);
   overflow: hidden;
   background: var(--m-color-surface-container-high);
   box-shadow:

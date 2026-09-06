@@ -17,7 +17,12 @@ from .analyze_url import AnalyzeUrl, get_absolute_url
 from .exceptions import FetchError, RuleError
 from .explore_ui import normalize_style
 from .net import StrResponse, fetch
-from .source_degradation import guest_reader_for, load_builtin, searcher_for
+from .source_degradation import (
+    explore_parser_for,
+    guest_reader_for,
+    load_builtin,
+    searcher_for,
+)
 
 # Import/register bundled source-capability adapters (e.g. guest-read fallback).
 # The engine core only asks "is there an adapter for this source?" and never
@@ -242,6 +247,19 @@ def _parse_book_list(
     if not str(body or "").strip():
         return []
 
+    # Some sources expose a large JSON list but use heavy per-field JS rules.
+    # A registered parser may map a recognized response directly; unknown or
+    # failed shapes return None and retain the complete legado rule fallback.
+    if not is_search:
+        adapter = explore_parser_for(source)
+        if adapter is not None:
+            try:
+                adapted = adapter.parse_explore(source, body, base_url)
+            except Exception:  # noqa: BLE001 - fast path must never break fallback
+                adapted = None
+            if adapted is not None:
+                return adapted
+
     # legado BookList: 搜索结果重定向到详情页（URL 命中 bookUrlPattern）时，
     # 直接按详情页规则解析出单本结果。
     if is_search and pattern:
@@ -278,11 +296,15 @@ def _parse_book_list(
             books.append(one)
         return books
 
+    # Legado's BookList reuses one AnalyzeRule and only swaps its content for
+    # each item. Besides matching that lifecycle, this keeps the source jsLib
+    # in one JS runtime. Creating an evaluator per book is especially costly
+    # for large sources (Fanqie's jsLib is ~200 KiB and lists may contain 50
+    # items), making every explore-category click appear to hang.
     for el in ar.get_elements(list_rule):
         try:
-            item_ar = AnalyzeRule(source=source, base_url=base_url)
-            item_ar.set_content(el, base_url=base_url)
-            fields = _fields(item_ar)
+            ar.set_content(el, base_url=base_url)
+            fields = _fields(ar)
             if not fields["name"]:
                 continue
             books.append(fields)

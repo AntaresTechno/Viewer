@@ -1,0 +1,124 @@
+/* The only theme layer coupled to miuix-vue's rendered class names. */
+.m-card {
+  border-radius: var(--app-radius-card);
+}
+
+.m-input__field {
+  border-radius: var(--app-radius-input, var(--m-radius-md, 16px));
+}
+
+.m-top-app-bar {
+  position: sticky;
+  top: 0;
+  z-index: 800;
+  background: var(--app-chrome-background) !important;
+  -webkit-backdrop-filter: var(--app-chrome-filter);
+  backdrop-filter: var(--app-chrome-filter);
+  box-shadow: inset 0 -1px 0 var(--app-chrome-edge);
+}
+
+html[data-design="md3e"] .m-button {
+  min-height: 44px;
+  padding-inline: 20px;
+  border-radius: var(--app-shape-full);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  transition:
+    border-radius var(--app-dur-spring) var(--app-ease-spring),
+    transform var(--app-dur-instant) var(--app-ease-calm),
+    filter var(--app-dur-instant) linear;
+}
+
+html[data-design="md3e"] .m-button:not(.m-button--primary):not(.m-button--disabled) {
+  background: var(--m-color-secondary-container);
+  color: var(--m-color-on-secondary-container);
+}
+
+html[data-design="md3e"] .m-button:not(.m-button--disabled):hover {
+  filter: brightness(0.98) saturate(1.04);
+}
+
+html[data-design="md3e"] .m-button:not(.m-button--disabled):active {
+  border-radius: var(--app-shape-md);
+  transform: scale(0.96);
+  filter: brightness(0.94) saturate(1.08);
+}
+
+html[data-design="md3e"] .m-icon-button {
+  --m-icon-button-radius: var(--app-shape-full);
+  min-width: 44px;
+  min-height: 44px;
+  transition:
+    border-radius var(--app-dur-spring) var(--app-ease-spring),
+    transform var(--app-dur-instant) var(--app-ease-calm),
+    background-color var(--app-dur-instant) linear;
+}
+
+html[data-design="md3e"] .m-icon-button:not(.m-icon-button--disabled):hover {
+  background: color-mix(in srgb, var(--m-color-on-surface) 8%, transparent);
+}
+
+html[data-design="md3e"] .m-icon-button:not(.m-icon-button--disabled):active {
+  border-radius: var(--app-shape-md);
+  transform: scale(0.9);
+  background: color-mix(in srgb, var(--m-color-on-surface) 12%, transparent);
+}
+
+html[data-design="md3e"] .m-card {
+  background: var(--m-card-color);
+  border: 1px solid var(--m-color-outline-variant);
+  box-shadow: var(--app-shadow-card);
+}
+
+html[data-design="md3e"] .m-dialog__content,
+html[data-design="md3e"] .m-bottom-sheet__inner {
+  border-radius: var(--app-shape-2xl);
+  background: var(--m-color-surface-container-high);
+  box-shadow: var(--app-shadow-pop);
+}
+
+html[data-design="md3e"] .m-input {
+  min-height: 52px;
+  background: var(--m-color-surface-container-lowest);
+  border-radius: var(--app-radius-input);
+  box-shadow: inset 0 0 0 1px var(--m-color-outline) !important;
+  transition:
+    box-shadow var(--app-dur-instant) linear,
+    background-color var(--app-dur-instant) linear;
+}
+
+html[data-design="md3e"] .m-input:hover {
+  background: color-mix(in srgb, var(--m-color-primary) 4%, var(--m-color-surface-container-lowest));
+}
+
+html[data-design="md3e"] .m-input:focus-within {
+  box-shadow: inset 0 0 0 2px var(--m-color-primary) !important;
+}
+
+html[data-design="md3e"] .m-snackbar__inner {
+  border-radius: var(--app-shape-md);
+  box-shadow: var(--app-shadow-pop);
+}
+
+html[data-design="md3e"] .m-dropdown-preference__popup {
+  border: 1px solid var(--m-color-outline-variant);
+  border-radius: var(--app-shape-lg);
+  box-shadow: var(--app-shadow-pop);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-design="md3e"] .m-button,
+  html[data-design="md3e"] .m-icon-button {
+    transition:
+      transform 100ms linear,
+      background-color 100ms linear,
+      filter 100ms linear;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .m-top-app-bar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

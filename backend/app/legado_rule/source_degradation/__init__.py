@@ -5,8 +5,9 @@ adapters (self-registering), so the engine can stay book-source-agnostic.
 """
 from __future__ import annotations
 
-from .interfaces import GuestReadAdapter, SearchAdapter
+from .interfaces import ExploreParserAdapter, GuestReadAdapter, SearchAdapter
 from .registry import (
+    explore_parser_for,
     guest_reader_for,
     load_builtin,
     register,
@@ -15,8 +16,10 @@ from .registry import (
 )
 
 __all__ = [
+    "ExploreParserAdapter",
     "GuestReadAdapter",
     "SearchAdapter",
+    "explore_parser_for",
     "guest_reader_for",
     "load_builtin",
     "register",

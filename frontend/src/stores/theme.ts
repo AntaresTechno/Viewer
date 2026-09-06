@@ -13,7 +13,8 @@ import { setTheme, setThemeMode, useTheme } from "miuix-vue";
  *     - "light" | "dark" | "system"
  *
  * 两项均持久化到 localStorage；`data-design` 属性挂在 <html> 上，
- * 由 theme/design.css 按 `html[data-design=…]` 作用域生效。
+ * 由 theme/design.css 聚合的独立主题实现按 `html[data-design=…]` 生效；
+ * 页面只依赖语义 token，不直接依赖某个主题实现。
  */
 
 export type DesignId = "miuix" | "md3e";

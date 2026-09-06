@@ -553,7 +553,11 @@ def test_fq_unsigned_search_payload_mapping():
             "author": "测试作者",
             "category": "男频衍生",
             "creation_status": "1",
-            "thumb_url": "https://img.example/cover.jpg",
+            "thumb_url": (
+                "https://p6-tt.bytecdn.cn/novel-pic/"
+                "d1ffe7fa1ae9d423e23dbd21779b006e"
+                "~tplv-shrink:640:0.image"
+            ),
             "abstract": "简介",
         }]},
     }, ensure_ascii=False)
@@ -562,6 +566,10 @@ def test_fq_unsigned_search_payload_mapping():
     assert out[0]["name"] == "庆余年同人"
     assert out[0]["kind"] == "男频衍生, 连载"
     assert out[0]["author"] == "测试作者"
+    assert out[0]["coverUrl"] == (
+        "https://p6-novel.byteimg.com/origin/novel-pic/"
+        "d1ffe7fa1ae9d423e23dbd21779b006e"
+    )
     assert out[0]["bookUrl"].endswith("book_id=7658604195917859902")
     assert out[0]["origin"] == SOURCE["bookSourceUrl"]
 
@@ -609,3 +617,69 @@ def test_fq_search_adapter_can_be_disabled():
     source = dict(SOURCE)
     source["extra"] = {"adapters": {"search": False}}
     assert searcher_for(source) is None
+
+
+def test_fq_explore_fast_parser_maps_cell_view_books():
+    from app.legado_rule.source_degradation import fanqie as fq
+
+    payload = json.dumps({
+        "code": 0,
+        "data": {"cell_view": {"book_data": [{
+            "book_id": "7512268698271370302",
+            "book_name": "测试发现书",
+            "author": "测试作者",
+            "category_schema": json.dumps([
+                {"name": "玄幻脑洞"}, {"name": "系统"}
+            ], ensure_ascii=False),
+            "creation_status": "1",
+            "word_number": "1490638",
+            "thumb_url": (
+                "https://p3-reading-sign.fqnovelpic.com/novel-pic-r/abc"
+                "~tplv-shrink:240:0.heic?x-signature=x"
+            ),
+        }]}},
+    }, ensure_ascii=False)
+    out = fq._fq_parse_explore_books(payload, SOURCE)
+    assert out is not None and len(out) == 1
+    assert out[0]["name"] == "测试发现书"
+    assert out[0]["kind"] == "玄幻脑洞, 系统, 连载"
+    assert out[0]["wordCount"] == "1490638"
+    # 与书源 replaceCover 一致：reading-sign 本身可用，直接保留。
+    assert out[0]["coverUrl"].startswith("https://p3-reading-sign.")
+
+
+def test_fq_explore_fast_parser_unknown_shape_falls_back():
+    from app.legado_rule.source_degradation import fanqie as fq
+
+    assert fq._fq_parse_explore_books(
+        '{"code":0,"data":{"new_shape":{"items":[]}}}', SOURCE
+    ) is None
+
+
+def test_fq_explore_fast_parser_is_used_before_rules(monkeypatch):
+    from app.legado_rule import web_book as wb
+
+    expected = [{"name": "快速结果"}]
+
+    class FakeParser:
+        def parse_explore(self, source, payload, base_url):
+            return expected
+
+    class MustNotConstruct:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("recognized response must skip JS rule parsing")
+
+    monkeypatch.setattr(wb, "explore_parser_for", lambda source: FakeParser())
+    monkeypatch.setattr(wb, "AnalyzeRule", MustNotConstruct)
+    assert wb._parse_book_list(
+        SOURCE, SOURCE["ruleExplore"], "https://example.invalid", "{}",
+        is_search=False,
+    ) == expected
+
+
+def test_fq_explore_fast_parser_can_be_disabled():
+    from app.legado_rule.source_degradation import explore_parser_for
+
+    source = dict(SOURCE)
+    source["extra"] = {"adapters": {"exploreParser": False}}
+    assert explore_parser_for(source) is None

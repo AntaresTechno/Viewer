@@ -154,7 +154,7 @@ onBeforeUnmount(() => {
 }
 .lbl {
   font-size: 12px;
-  color: var(--m-color-on-surface-secondary);
+  color: var(--app-color-text-muted);
   margin-bottom: 6px;
 }
 .seg {
@@ -162,16 +162,16 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 2px;
   padding: 3px;
-  border-radius: 999px;
-  background: var(--m-color-surface-container-high);
+  border-radius: var(--app-shape-full);
+  background: var(--app-segment-track);
 }
 .seg-thumb {
   position: absolute;
   top: 3px;
   bottom: 3px;
   left: 0;
-  border-radius: 999px;
-  background: var(--m-color-surface);
+  border-radius: var(--app-shape-full);
+  background: var(--app-segment-thumb);
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.12),
     0 0 0 1px color-mix(in srgb, var(--m-color-outline) 35%, transparent);
@@ -180,8 +180,8 @@ onBeforeUnmount(() => {
 }
 .seg-thumb.anim {
   transition:
-    transform 0.5s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1)),
-    width 0.5s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+    transform var(--app-dur-spring) var(--app-ease-spring),
+    width var(--app-dur-spring) var(--app-ease-spring);
 }
 @media (prefers-reduced-motion: reduce) {
   .seg-thumb.anim {
@@ -194,11 +194,11 @@ onBeforeUnmount(() => {
   flex: 1;
   border: 0;
   background: transparent;
-  border-radius: 999px;
+  border-radius: var(--app-shape-full);
   padding: 7px 12px;
   font-size: 13px;
   font-family: inherit;
-  color: var(--m-color-on-surface-secondary);
+  color: var(--app-color-text-muted);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -206,14 +206,16 @@ onBeforeUnmount(() => {
   .seg-item {
     transition:
       color 0.15s ease-out,
-      transform 0.35s var(--app-ease-spring, cubic-bezier(0.3, 1.12, 0.4, 1));
+      transform var(--app-dur-calm) var(--app-ease-spring),
+      border-radius var(--app-dur-calm) var(--app-ease-spring);
   }
   .seg-item:active {
     transform: scale(0.96);
+    border-radius: var(--app-shape-md);
   }
 }
 .seg-item.on {
-  color: var(--m-color-on-surface);
-  font-weight: 600;
+  color: var(--app-segment-thumb-foreground);
+  font-weight: 650;
 }
 </style>
