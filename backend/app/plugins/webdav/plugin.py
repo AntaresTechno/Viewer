@@ -42,7 +42,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from ...plugins.registry import PluginContext
 
-meta = {
+PLUGIN = {
+    "kind": "plugin",
     "name": "webdav",
     "mount": "webdav",
     "title": "WebDAV 备份",

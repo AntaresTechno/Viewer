@@ -207,7 +207,7 @@ async def _fetch_book_list(
     # 先记录请求级信息，再解析：空响应/异常 URL 一眼可见。
     _log_list_response(source, res,
                        kind="search" if is_search else "explore")
-    # 规则求值可能内嵌同步 java.ajax（dukpy 无法 await），放到线程池执行，
+    # 规则求值可能内嵌同步 java.ajax，放到线程池执行，
     # 避免阻塞事件循环拖慢所有并发请求。
     return await asyncio.to_thread(
         _parse_book_list, source, rules, res.url, res.body,

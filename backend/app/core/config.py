@@ -39,11 +39,6 @@ class Settings(BaseSettings):
     image_cache_mb: int = 300         # 图片磁盘缓存上限（LRU 逐出）
     replace_regex_timeout: float = 5.0  # 单条净化规则正则执行超时
 
-    # ---- JS 引擎（书源 @js/{{}} 规则）----
-    # auto：按当前安装情况自动选择（quickjs > stpyv8 > dukpy）；
-    # 也可显式指定 quickjs / stpyv8 / dukpy 之一，优先于运行期 UI 覆盖。
-    js_engine: str = "auto"
-
     # ---- 跨域单点登录会话镜像 ----
     # 某些账号体系把同一个会话 Cookie（默认 key: sessionid）同时下发到多个域名
     # （如「番茄/头条系」的 fanqienovel.com 与 snssdk.com）。此处用「域名分组」

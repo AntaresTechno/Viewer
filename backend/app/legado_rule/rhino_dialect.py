@@ -1,7 +1,7 @@
 """Rhino dialect helpers for book-source scripts.
 
 legado runs book-source JS on Rhino, which differs from ES6 engines
-(quickjs / dukpy / V8) in two ways that real sources depend on:
+QuickJS in two ways that real sources depend on:
 
 1. ``const``/``let`` inside a ``with (...) { ... }`` block keep **script
    scope** on Rhino, so the names stay visible after the block ends. On ES6
@@ -258,7 +258,7 @@ def _this_sub(_m: "re.Match[str]") -> str:
 # We cannot retrofit that into the engine, so `normalize_eval_leak` rewrites
 # `eval(X)` into `__rhinoEval(X)`: a helper that runs the code and then
 # re-exports any name it declared that was not already defined, using an
-# assignment on the global object (works identically on quickjs/dukpy/V8).
+# assignment on the QuickJS global object.
 _LEGAL_EXPORT = re.compile(r"^[A-Za-z_$][\w$]*$")
 
 # `let`/`const` at the very start of a declaration, for the top level of an

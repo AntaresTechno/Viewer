@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from ...plugins.registry import PluginContext
 
-meta = {
+PLUGIN = {
+    "kind": "core",
     "name": "dashboard",
     "mount": "dashboard",
     "title": "仪表盘",
@@ -41,7 +42,7 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         recent_users = (
             await db.execute(select(User).order_by(User.created_at.desc()).limit(5))
         ).scalars().all()
-        plugins = all_plugins()
+        components = all_plugins()
         states = {
             r.name: r.enabled
             for r in (await db.execute(select(PluginState))).scalars().all()
@@ -51,8 +52,17 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             "sources_total": sources_total or 0,
             "shelf_total": shelf_total or 0,
             "roles_total": roles_total or 0,
-            "plugins_enabled": sum(1 for p in plugins if states.get(p.name, True)),
-            "plugins_total": len(plugins),
+            "plugins_enabled": sum(
+                1 for p in components
+                if p.kind == "plugin" and states.get(p.name, True)
+            ),
+            "plugins_total": sum(1 for p in components if p.kind == "plugin"),
+            "rule_engines_enabled": sum(
+                1 for p in components
+                if p.kind == "engine" and states.get(p.name, True)
+            ),
+            "rule_engines_total": sum(1 for p in components if p.kind == "engine"),
+            "core_modules_total": sum(1 for p in components if p.kind == "core"),
             "recent_users": [
                 {
                     "id": u.id,

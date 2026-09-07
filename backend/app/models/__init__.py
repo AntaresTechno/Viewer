@@ -77,6 +77,82 @@ class BookSourceRow(Base):
     engine: Mapped[str] = mapped_column(String(32), default="legado")
 
 
+class RssSourceRow(Base):
+    """A Legado-compatible RSS/subscription source.
+
+    ``raw_json`` is kept losslessly so newer Legado fields survive an
+    import/export round trip even when Viewer does not use them yet.
+    """
+
+    __tablename__ = "rss_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_url: Mapped[str] = mapped_column(String(1024), unique=True, index=True)
+    source_name: Mapped[str] = mapped_column(String(256), default="", index=True)
+    source_icon: Mapped[str] = mapped_column(String(1024), default="")
+    source_group: Mapped[str] = mapped_column(String(256), default="", index=True)
+    source_comment: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    custom_order: Mapped[int] = mapped_column(Integer, default=0)
+    raw_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class RssArticleRow(Base):
+    """Cached article metadata/content shared by all users."""
+
+    __tablename__ = "rss_articles"
+    __table_args__ = (
+        UniqueConstraint("origin", "link", "sort", name="uq_rss_article"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    origin: Mapped[str] = mapped_column(String(1024), index=True)
+    sort: Mapped[str] = mapped_column(String(256), default="", index=True)
+    title: Mapped[str] = mapped_column(String(512), default="")
+    link: Mapped[str] = mapped_column(String(2048))
+    pub_date: Mapped[str] = mapped_column(String(256), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    image: Mapped[str] = mapped_column(String(2048), default="")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RssReadState(Base):
+    """Per-user read state for a cached subscription article."""
+
+    __tablename__ = "rss_read_states"
+    __table_args__ = (
+        UniqueConstraint("user_id", "article_id", name="uq_rss_read_state"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    article_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("rss_articles.id", ondelete="CASCADE"), index=True
+    )
+    read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RssFavorite(Base):
+    """Per-user favorites, corresponding to Legado's rssStars table."""
+
+    __tablename__ = "rss_favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "article_id", name="uq_rss_favorite"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    article_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("rss_articles.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ShelfItem(Base):
     __tablename__ = "shelf_items"
 

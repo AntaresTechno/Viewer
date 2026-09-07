@@ -1,4 +1,4 @@
-"""plugins 插件 — 插件开关管理 + ZIP 安装（仅超级管理员）。"""
+"""插件管理核心模块 — 组件开关管理 + ZIP 安装（仅超级管理员）。"""
 
 import io
 import re
@@ -12,14 +12,15 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from ...plugins.registry import PluginContext
 
-meta = {
+PLUGIN = {
+    "kind": "core",
     "name": "plugins",
     "mount": "plugins",
     "title": "插件管理",
     "version": "1.1.0",
-    "description": "查看已加载的 API 插件并启用/停用（重启生效）；支持上传 ZIP 安装新插件",
+    "description": "按规则引擎、插件、核心模块查看组件；管理可选组件并安装 ZIP",
     "order": 22,
-    "permissions": [("plugins.manage", "查看与启停插件")],
+    "permissions": [("plugins.manage", "管理规则引擎与插件")],
 }
 
 # ZIP 安装的安全上限
@@ -136,7 +137,11 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                     "version": p.version,
                     "description": p.description,
                     "mount": p.mount,
-                    "enabled": states.get(p.name, True),
+                    "kind": p.kind,
+                    "kindLabel": registry_mod.PLUGIN_KIND_LABELS[p.kind],
+                    "canToggle": p.kind != "core",
+                    "legacyManifest": p.legacy_manifest,
+                    "enabled": True if p.kind == "core" else states.get(p.name, True),
                 }
                 for p in all_plugins()
             ]
@@ -147,7 +152,10 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                      current=Depends(require_superuser)):
         known = {p.name for p in all_plugins()}
         if name not in known:
-            raise HTTPException(404, "插件不存在")
+            raise HTTPException(404, "组件不存在")
+        info = next(p for p in all_plugins() if p.name == name)
+        if info.kind == "core":
+            raise HTTPException(400, "核心模块固定启用，不能停用")
         await toggle_plugin(name, body.enabled)
         # keep the live disabled-set in sync so engine lookups respect it
         from ...plugins.registry import _DISABLED_PLUGINS, set_disabled_plugins
@@ -170,7 +178,7 @@ def create_router(ctx: "PluginContext") -> APIRouter:
 
         - 包内根目录（或唯一子目录）需含 ``plugin.py``；
         - 安装即校验导入，失败自动回滚并返回原因；
-        - 规则引擎类插件即时生效；API 路由类插件需重启后端挂载。
+        - 规则引擎即时生效；带 API 的组件需重启后端挂载。
         """
         import importlib
         import shutil
@@ -215,6 +223,14 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             staging = pkg_root / f"_upload_{dirname}_{id(file)}"
             had_old = dest.exists()
 
+            existing_info = next(
+                (p for p in all_plugins()
+                 if p.module_name == f"{base_pkg}.{dirname}.plugin"),
+                None,
+            )
+            if existing_info is not None and existing_info.kind == "core":
+                raise HTTPException(400, "核心模块不能通过插件 ZIP 覆盖安装")
+
             try:
                 shutil.rmtree(staging, ignore_errors=True)
                 staging.mkdir(parents=True)
@@ -240,13 +256,36 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                 # 之内，必须先失效导入缓存，否则 import/发现都看不到新目录。
                 refresh_import_caches()
 
-                # 校验：真实走一遍 import，meta 不合规视为坏包并回滚
+                # 校验：真实走一遍 import，PLUGIN 不合规视为坏包并回滚
                 purge_modules(dirname)
                 module = importlib.import_module(f"{base_pkg}.{dirname}.plugin")
-                meta_obj = getattr(module, "meta", None)
-                if not isinstance(meta_obj, dict) or not meta_obj.get("name"):
+                manifest_obj = getattr(module, "PLUGIN", None)
+                legacy = False
+                if not isinstance(manifest_obj, dict):
+                    manifest_obj = getattr(module, "meta", None)
+                    legacy = isinstance(manifest_obj, dict)
+                if not isinstance(manifest_obj, dict) or not manifest_obj.get("name"):
                     raise ValueError(
-                        "plugin.py 缺少有效的 meta 字典（需至少包含 name）"
+                        "plugin.py 缺少有效的 PLUGIN 声明（需至少包含 name 与 kind）"
+                    )
+                declared_kind = str(manifest_obj.get("kind") or "").strip().lower()
+                if legacy and not declared_kind:
+                    declared_kind = (
+                        "engine" if isinstance(getattr(module, "ENGINE", None), dict)
+                        and callable(getattr(module, "create_engine", None)) else "plugin"
+                    )
+                if declared_kind not in registry_mod.PLUGIN_KINDS:
+                    raise ValueError(
+                        "PLUGIN.kind 必须是 engine、plugin 或 core"
+                    )
+                if declared_kind == "core":
+                    raise ValueError("外部安装包不能声明为核心模块")
+                if declared_kind == "engine" and not (
+                    isinstance(getattr(module, "ENGINE", None), dict)
+                    and callable(getattr(module, "create_engine", None))
+                ):
+                    raise ValueError(
+                        "规则引擎声明需要同时提供 ENGINE 与 create_engine"
                     )
             except HTTPException:
                 purge_modules(dirname)
@@ -273,18 +312,21 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         registry_mod.discover_plugins(force=True)
         registry_mod._INSTANCE_CACHE.clear()
 
-        info = next((p for p in all_plugins() if p.name == meta_obj["name"]), None)
+        info = next((p for p in all_plugins() if p.name == manifest_obj["name"]), None)
         has_router = bool(info and info.create_router)
-        note = (
-            "安装成功。API 路由将在重启后端后挂载生效。"
-            if has_router
-            else "规则引擎/纯声明插件已即时生效。"
-        )
+        if info and info.kind == "engine":
+            note = (
+                "规则引擎已生效；附带的 API 路由将在重启后端后挂载。"
+                if has_router else "规则引擎已即时生效。"
+            )
+        else:
+            note = "插件安装成功；API 路由将在重启后端后挂载生效。"
         return {
             "ok": True,
-            "name": meta_obj["name"],
-            "title": meta_obj.get("title", meta_obj["name"]),
-            "version": meta_obj.get("version", "?"),
+            "name": manifest_obj["name"],
+            "title": manifest_obj.get("title", manifest_obj["name"]),
+            "version": manifest_obj.get("version", "?"),
+            "kind": info.kind if info else declared_kind,
             "note": note,
         }
 

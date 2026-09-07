@@ -182,7 +182,7 @@ class TestMd3Builtin:
 
 class TestJsReplacement:
     def test_js_replacement_executed(self):
-        """@js: 替换经 JS 引擎执行（dukpy/quickjs 任一可用）。"""
+        """@js: 替换经 QuickJS 执行。"""
         from app.legado_rule.js_bridge import detect_engine
         from app.services.content_purify import purify_text
 

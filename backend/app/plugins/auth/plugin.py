@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from ...plugins.registry import PluginContext
 
-meta = {
+PLUGIN = {
+    "kind": "core",
     "name": "auth",
     "mount": "auth",
     "title": "认证",

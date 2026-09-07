@@ -175,7 +175,7 @@ class AnalyzeRule:
         self._string_cache: dict[str, list[SourceRule]] = {}
         self._cache_lock = threading.Lock()
         self.bridge = JavaBridge(owner=self, base_url=self.base_url)
-        # JS 求值器按实例复用：构造一次 quickjs/dukpy 运行时（含桥接注册
+        # JS 求值器按实例复用：构造一次 QuickJS 运行时（含桥接注册
         # 与书源 jsLib 执行），后续每次 @js: 只更新 result 变量再求值。
         # 旧实现每次 eval 都重建运行时，一页列表几十次求值时开销占绝对
         # 大头。绑定中的 book/baseUrl 等在解析生命周期内视为静态。

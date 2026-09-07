@@ -36,6 +36,8 @@ const ICONS: Record<string, string> = {
     '<path d="m4.2 11.3 7.8-7 7.8 7"/><path d="M6.3 9.6V19a.9.9 0 0 0 .9.9h9.6a.9.9 0 0 0 .9-.9V9.6"/><path d="M10 19.7v-5.2h4v5.2"/>',
   shelf:
     '<path d="M5.5 20V7.5"/><path d="M10 20V4.5"/><path d="M14.5 20V7.5"/><path d="m18.9 18.6-2.2-11"/><path d="M3.8 20h16.4"/>',
+  rss:
+    '<path d="M5 5.2c7.6 0 13.8 6.2 13.8 13.8"/><path d="M5 10.6a8.4 8.4 0 0 1 8.4 8.4"/><circle cx="5.2" cy="18.8" r="1.4"/>',
   library:
     '<path d="M12 4.5V13"/><path d="m8.5 9.7 3.5 3.5 3.5-3.5"/><path d="M4.5 14.5V18A1.5 1.5 0 0 0 6 19.5h12a1.5 1.5 0 0 0 1.5-1.5v-3.5"/>',
   search:
@@ -65,6 +67,13 @@ const nav: NavItem[] = [
     icon: "shelf",
     show: () => true,
     match: (p) => p === "/shelf" || p.startsWith("/book/") || p.startsWith("/reader"),
+  },
+  {
+    label: "订阅",
+    to: "/rss",
+    icon: "rss",
+    show: () => auth.can("rss.read"),
+    match: (p) => p === "/rss",
   },
   {
     label: "本地库",
@@ -119,9 +128,9 @@ const nav: NavItem[] = [
 
 /** 分组：相邻的同类入口放在一起，分组标题解释「这一片是什么」。 */
 const groups: { label: string; items: NavItem[] }[] = [
-  { label: "阅读", items: nav.slice(0, 3) },
-  { label: "探索", items: nav.slice(3, 5) },
-  { label: "系统", items: nav.slice(5, 9) },
+  { label: "阅读", items: nav.slice(0, 4) },
+  { label: "探索", items: nav.slice(4, 6) },
+  { label: "系统", items: nav.slice(6, 10) },
 ];
 
 const visibleGroups = computed(() =>
@@ -171,6 +180,9 @@ watch(flatVisible, () => void nextTick(scheduleThumbMeasure));
 
 let ro: ResizeObserver | null = null;
 onMounted(() => {
+  // Refresh permissions after backend/plugin upgrades. The persisted user
+  // snapshot may predate a newly added plugin (for example RSS subscriptions).
+  void auth.refreshMe();
   scheduleThumbMeasure();
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {

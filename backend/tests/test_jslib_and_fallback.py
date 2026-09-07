@@ -12,7 +12,7 @@ from app.legado_rule.analyze_rule import AnalyzeRule
 from app.legado_rule.analyze_url import AnalyzeUrl
 from app.legado_rule.web_book import _parse_book_list
 
-pytest.importorskip("dukpy", reason="需要 JS 引擎（dukpy 或 quickjs）")
+pytest.importorskip("quickjs", reason="需要 QuickJS")
 
 
 SOURCE_WITH_JSLIB = {

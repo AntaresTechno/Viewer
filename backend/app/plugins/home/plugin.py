@@ -19,7 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from ...plugins.registry import PluginContext
 
-meta = {
+PLUGIN = {
+    "kind": "core",
     "name": "home",
     "mount": "home",
     "title": "首页",

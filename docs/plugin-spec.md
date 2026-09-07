@@ -1,16 +1,20 @@
 # Viewer 插件说明与开发规范
 
-本文描述 Viewer 当前实现支持的插件能力。插件是运行在后端进程中的 Python 包，可提供 API、书源引擎，或同时提供两者。
+本文描述 Viewer 后端组件的声明与扩展规范。组件是运行在后端进程中的 Python 包，分为规则引擎、插件和核心模块三类，并可提供 API 或书源解析能力。
 
 > 插件与后端拥有相同权限，不是沙箱。只安装可信代码。
 
-## 1. 能力边界
+## 1. 组件类型与能力边界
 
-| 类型 | 入口 | 用途 | 生效方式 |
+| `PLUGIN.kind` | 用途 | 可启停 | 外部 ZIP 安装 |
 | --- | --- | --- | --- |
-| API 插件 | `create_router(ctx)` | 增加 FastAPI 接口 | 重启后端后挂载 |
-| 书源引擎插件 | `ENGINE` + `create_engine(ctx)` | 实现搜索、发现、详情、目录和正文解析 | 安装后可立即发现 |
-| 混合插件 | 同时提供以上入口 | 引擎能力附带管理接口 | 分别遵循上述规则 |
+| `engine` | 规则引擎；必须提供 `ENGINE` + `create_engine(ctx)`，可附带 API | 是 | 是 |
+| `plugin` | 可选业务扩展，通常提供 `create_router(ctx)` | 是 | 是 |
+| `core` | 应用运行或基础业务所需的内置模块 | 否，固定启用 | 否 |
+
+能力入口与类型正交：`create_router(ctx)` 增加 FastAPI 接口；规则引擎还必须提供
+`ENGINE` + `create_engine(ctx)`。因此规则引擎可以同时附带管理 API，但它仍只声明为
+`kind="engine"`，不再使用“混合插件”作为第四种类型。
 
 当前插件系统不加载前端代码。前端页面、菜单和路由仍需在 `frontend` 中正常开发和构建。
 
@@ -43,7 +47,7 @@ app.plugins.<目录名>.plugin
 
 处理顺序如下：
 
-1. 读取 `meta`。
+1. 读取 `PLUGIN`（旧版 `meta` 仅作兼容）。
 2. 识别 API 和引擎工厂。
 3. 按 `order`、`name` 排序。
 4. 读取数据库中的启停状态。
@@ -52,12 +56,13 @@ app.plugins.<目录名>.plugin
 
 单个插件导入失败时会记录错误并跳过，不阻止其他插件启动。插件实例按引擎 `key` 缓存在进程内，因此实例必须可复用，并自行保证并发安全。
 
-## 4. 元数据规范
+## 4. `PLUGIN` 声明规范
 
-所有插件都必须导出 `meta`：
+所有新组件都必须导出 `PLUGIN`：
 
 ```python
-meta = {
+PLUGIN = {
+    "kind": "plugin",
     "name": "example",
     "mount": "example",
     "title": "示例插件",
@@ -73,8 +78,9 @@ meta = {
 
 | 字段 | 必需 | 规范 |
 | --- | --- | --- |
+| `kind` | 是 | `engine` / `plugin` / `core`；外部组件不能声明 `core` |
 | `name` | 是 | 全局唯一、稳定；使用小写字母、数字和下划线 |
-| `mount` | API 插件必需 | `/api/` 后的单段路径，不含前后斜杠 |
+| `mount` | 带 API 的组件必需 | `/api/` 后的单段路径，不含前后斜杠 |
 | `title` | 否 | 面向用户的名称，默认等于 `name` |
 | `version` | 否 | 建议使用语义化版本，默认 `0.0.0` |
 | `description` | 否 | 简短说明，不写安装教程 |
@@ -82,11 +88,14 @@ meta = {
 | `permissions` | 否 | `(权限键, 标题)` 列表，默认空 |
 | `mount_root` | 特殊场景 | 站点根路径，仅与 `create_root_router` 配套使用 |
 
-`name`、`mount`、引擎 `key` 和权限键发布后不得随意改变。不同插件不得声明相同名称、挂载路径或引擎键。
+`name`、`kind`、`mount`、引擎 `key` 和权限键发布后不得随意改变。不同组件不得声明相同名称、挂载路径或引擎键。
 
-## 5. API 插件
+旧组件若只导出 `meta`，注册器仍会读取：存在 `ENGINE + create_engine` 时推断为
+`engine`，否则推断为 `plugin`。管理页会显示“旧声明”，应在下一版本迁移为 `PLUGIN`。
 
-API 插件导出同步工厂 `create_router(ctx)`，返回 `APIRouter`：
+## 5. API 能力
+
+任一类型的组件都可以导出同步工厂 `create_router(ctx)`，返回 `APIRouter`：
 
 ```python
 from typing import TYPE_CHECKING
@@ -96,7 +105,8 @@ from fastapi import APIRouter, Depends
 if TYPE_CHECKING:
     from ..registry import PluginContext
 
-meta = {
+PLUGIN = {
+    "kind": "plugin",
     "name": "example",
     "mount": "example",
     "title": "示例插件",
@@ -120,23 +130,23 @@ def create_router(ctx: "PluginContext") -> APIRouter:
 最终路径为：
 
 ```text
-/api/<meta.mount>/<router path>
+/api/<PLUGIN.mount>/<router path>
 ```
 
 只有确实需要脱离 `/api` 的协议端点才可使用根路由：
 
 ```python
-meta["mount_root"] = "example-protocol"
+PLUGIN["mount_root"] = "example-protocol"
 
 def create_root_router(ctx: "PluginContext") -> APIRouter:
     ...
 ```
 
-根路由挂载到 `/<mount_root>`，必须自行完成认证、防冲突和缓存控制。根路由仅对同时具有 `create_router` 的 API 插件有效。
+根路由挂载到 `/<mount_root>`，必须自行完成认证、防冲突和缓存控制。根路由仅对同时具有 `create_router` 的组件有效。
 
-## 6. 书源引擎插件
+## 6. 规则引擎
 
-引擎插件还需导出：
+`kind = "engine"` 的组件还需导出：
 
 ```python
 ENGINE = {
@@ -144,6 +154,13 @@ ENGINE = {
     "title": "Example 书源",
     "version": "1.0.0",
     "description": "Example 格式的书源解析器",
+}
+
+PLUGIN = {
+    "kind": "engine",
+    "name": "engine_example",
+    "title": "Example 规则引擎",
+    "version": "1.0.0",
 }
 
 def create_engine(ctx):
@@ -249,7 +266,7 @@ from __future__ import annotations
 
 权限键使用 `<插件名>.<能力>`，例如 `example.read`、`example.manage`。
 
-- `meta.permissions` 只负责登记权限目录，不会自动保护路由。
+- `PLUGIN.permissions` 只负责登记权限目录，不会自动保护路由。
 - 受保护端点必须显式使用 `Depends(require_perm("..."))`。
 - 仅超级管理员可用 `require_superuser`。
 - 超级管理员、`*` 和 `<插件名>.*` 可绕过单项权限检查。
@@ -282,10 +299,11 @@ from __future__ import annotations
 
 生效规则：
 
-- 新引擎会刷新注册表并清空实例缓存，可立即使用。
+- 新规则引擎会刷新注册表并清空实例缓存，可立即使用。
 - API 路由只在应用创建时挂载，安装、启用或停用后均应重启后端。
-- 启停状态保存在 `plugin_states` 表；默认启用未记录的已发现插件。
+- 插件与规则引擎的启停状态保存在 `plugin_states` 表；默认启用未记录的已发现组件。
 - 停用引擎会立即阻止新的引擎获取，但仍建议重启以获得一致状态。
+- 核心模块固定启用，忽略历史停用记录，管理接口拒绝切换，也不能被 ZIP 覆盖。
 
 ## 11. 解耦规范
 
@@ -304,7 +322,7 @@ from __future__ import annotations
 发布前至少确认：
 
 - [ ] 插件可被 `discover_plugins(force=True)` 发现。
-- [ ] `name`、`mount`、引擎 `key` 和权限键无冲突。
+- [ ] `PLUGIN.kind` 合法，`name`、`mount`、引擎 `key` 和权限键无冲突。
 - [ ] 导入阶段无网络、数据库写入或后台任务。
 - [ ] 每个非公开端点都有权限校验。
 - [ ] 输入有类型、长度和范围限制。
@@ -312,7 +330,7 @@ from __future__ import annotations
 - [ ] 引擎实现全部接口并返回标准字段。
 - [ ] 停用依赖后仍能正常降级。
 - [ ] 单元测试覆盖发现、权限、成功路径和失败路径。
-- [ ] API 插件重启后验证路由，升级和失败回滚均已测试。
+- [ ] 带 API 的组件重启后验证路由，升级和失败回滚均已测试。
 
 最小验证命令：
 

@@ -36,7 +36,11 @@ export interface PluginItem {
   title: string;
   version: string;
   description: string;
-  mount: string;
+  mount: string | null;
+  kind: "engine" | "plugin" | "core";
+  kindLabel: "规则引擎" | "插件" | "核心模块";
+  canToggle: boolean;
+  legacyManifest: boolean;
   enabled: boolean;
 }
 
@@ -60,6 +64,9 @@ export interface DashboardSummary {
   roles_total: number;
   plugins_enabled: number;
   plugins_total: number;
+  rule_engines_enabled: number;
+  rule_engines_total: number;
+  core_modules_total: number;
   recent_users: {
     id: number;
     username: string;
@@ -89,6 +96,42 @@ export interface SourceRow {
   sourceGroup: string;
   enabled: boolean;
   engine: string;
+}
+
+export interface RssSource {
+  id: number;
+  sourceUrl: string;
+  sourceName: string;
+  sourceIcon: string;
+  sourceGroup: string;
+  sourceComment: string;
+  enabled: boolean;
+  customOrder: number;
+  articleStyle: number;
+  singleUrl: boolean;
+  hasSearch: boolean;
+}
+
+export interface RssSort {
+  name: string;
+  url: string;
+}
+
+export interface RssArticle {
+  id: number;
+  origin: string;
+  sort: string;
+  title: string;
+  link: string;
+  pubDate: string;
+  description: string;
+  image: string;
+  read: boolean;
+  favorite: boolean;
+}
+
+export interface RssArticleContent extends RssArticle {
+  content: string;
 }
 
 /* ------------------------------------------------- legado 书源登录 */
@@ -523,7 +566,7 @@ export const api = {
   pluginInstall: async (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const r = await http.post<{ ok: boolean; name: string; title?: string; version?: string; note?: string }>(
+    const r = await http.post<{ ok: boolean; name: string; title?: string; version?: string; kind?: PluginItem["kind"]; note?: string }>(
       "/plugins/install",
       fd,
       { timeout: 120_000 },
@@ -571,6 +614,57 @@ export const api = {
   legadoLoginInfoRemove: async (sourceUrl: string) => {
     await http.post("/legado/login/info/remove", { source_url: sourceUrl });
   },
+
+  /* --------------------------------------------------- RSS subscriptions */
+  rssSources: async () => {
+    const r = await http.get<{ items: RssSource[]; groups: string[] }>("/rss/sources");
+    return r.data;
+  },
+  rssImport: async (body: { data?: string; url?: string }) => {
+    const r = await http.post<{ added: number; updated: number; skipped: number }>(
+      "/rss/sources/import", body,
+    );
+    return r.data;
+  },
+  rssDelete: async (ids: number[]) => {
+    await http.post("/rss/sources/delete", { ids });
+  },
+  rssToggle: async (id: number) => {
+    return (await http.post<{ enabled: boolean }>(`/rss/sources/${id}/toggle`)).data;
+  },
+  rssSorts: async (sourceUrl: string) => {
+    return (await http.get<{ items: RssSort[] }>("/rss/sorts", {
+      params: { source_url: sourceUrl },
+    })).data;
+  },
+  rssArticles: async (params: {
+    sourceUrl: string;
+    sortName?: string;
+    sortUrl?: string;
+    page?: number;
+    searchKey?: string;
+  }) => {
+    const r = await http.get<{ items: RssArticle[]; nextUrl: string | null; warning: string }>(
+      "/rss/articles",
+      { params: {
+        source_url: params.sourceUrl,
+        sort_name: params.sortName ?? "",
+        sort_url: params.sortUrl ?? "",
+        page: params.page ?? 1,
+        search_key: params.searchKey ?? "",
+      } },
+    );
+    return r.data;
+  },
+  rssArticleContent: async (id: number) =>
+    (await http.get<RssArticleContent>(`/rss/articles/${id}/content`)).data,
+  rssMarkRead: async (id: number) => {
+    await http.post(`/rss/articles/${id}/read`);
+  },
+  rssToggleFavorite: async (id: number) =>
+    (await http.post<{ favorite: boolean }>(`/rss/articles/${id}/favorite`)).data,
+  rssFavorites: async () =>
+    (await http.get<{ items: RssArticle[] }>("/rss/favorites")).data,
 
   /* ------------------------------------------------------------ books */
   sourcesList: async () => {
@@ -1124,10 +1218,6 @@ export const api = {
   /* ------------------------------------------------------------ JS 引擎 */
   jsEngines: async () => {
     const r = await http.get<JsEngines>("/js/engines");
-    return r.data;
-  },
-  jsSetEngine: async (engine: string) => {
-    const r = await http.put<JsEngines>("/js/engine", { engine });
     return r.data;
   },
 };

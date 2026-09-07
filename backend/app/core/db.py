@@ -153,6 +153,8 @@ async def init_db() -> None:
                 "books.toc", "books.content", "books.progress.write",
                 # 首页插件（最近阅读 / 阅读统计）
                 "home.read", "home.stats.write",
+                # 订阅插件（管理源仍只授予管理员）
+                "rss.read", "rss.favorite",
             ]),
             "guest": ("访客", ["auth.basic"]),
         }
@@ -164,14 +166,20 @@ async def init_db() -> None:
 
         # 一次性为旧库补种后加的默认权限（只跑一次，之后以界面编辑为准）
         seeded = await session.get(AppKV, "seeded_default_perms")
-        if seeded is None:
-            session.add(AppKV(key="seeded_default_perms", value="v2"))
+        seed_version = seeded.value if seeded is not None else ""
+        if seed_version != "v3":
+            if seeded is None:
+                seeded = AppKV(key="seeded_default_perms", value="v3")
+                session.add(seeded)
+            else:
+                seeded.value = "v3"
             user_role = by_name.get("user")
             if user_role is not None:
                 have = set(user_role.permissions or [])
-                user_role.permissions = sorted(
-                    have | {"home.read", "home.stats.write"}
-                )
+                user_role.permissions = sorted(have | {
+                    "home.read", "home.stats.write",
+                    "rss.read", "rss.favorite",
+                })
 
         # default admin account
         has_user = (

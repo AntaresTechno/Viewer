@@ -21,28 +21,12 @@ from app.legado_rule import js_bridge  # noqa: E402
 from app.legado_rule.source_bridge import InfoMapBridge, bridges_for  # noqa: E402
 
 
-def _engines() -> list[str]:
-    """Engines actually installed — dukpy is usually absent."""
-    import importlib.util
-
-    found = []
-    for mod, name in (("quickjs", "quickjs"), ("STPyV8", "stpyv8"),
-                      ("dukpy", "dukpy")):
-        try:
-            if importlib.util.find_spec(mod) is not None:
-                found.append(name)
-        except (ImportError, ValueError):
-            continue
-    return found or ["quickjs"]
-
-
-ENGINES = _engines()
+ENGINES = ["quickjs"]
 all_engines = pytest.mark.parametrize("engine", ENGINES, ids=ENGINES)
 
 @pytest.fixture(autouse=True)
 def _restore_engine():
-    """`_engine_name` is process-global; leaving it pinned to stpyv8 makes
-    unrelated tests (and their thread pools) inherit it."""
+    """Restore the process-global QuickJS availability cache."""
     saved = js_bridge._engine_name
     yield
     js_bridge._engine_name = saved
@@ -411,44 +395,6 @@ def test_explore_kinds_keep_style_metadata():
 
     kinds = explore_kinds(SOURCE)
     assert any(isinstance(k.get("style"), dict) for k in kinds)
-
-
-# --------------------------------------------- 12. engine robustness
-@pytest.mark.skipif("stpyv8" not in ENGINES, reason="STPyV8 未安装")
-def test_stpyv8_used_off_main_thread_falls_back():
-    """STPyV8 embeds one V8 isolate; touching it from a worker thread after a
-    main-thread context exists is an access violation that kills the process
-    (cloudflare/stpyv8#100). Callers like content_purify / source_login run JS
-    in a thread pool, so the evaluator must fall back there.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-
-    saved = js_bridge._engine_name
-    js_bridge._engine_name = "stpyv8"
-    try:
-        assert js_bridge.JsEvaluator({"result": "x"}).engine == "stpyv8"
-
-        def work(_i):
-            ev = js_bridge.JsEvaluator({"result": "x"})
-            return ev.engine, ev.eval("result.toUpperCase();")
-
-        with ThreadPoolExecutor(3) as ex:
-            got = list(ex.map(work, range(3)))
-    finally:
-        js_bridge._engine_name = saved
-    assert [g[0] for g in got] != ["stpyv8"] * 3, "worker used stpyv8"
-    assert all(g[1] == "X" for g in got)
-
-
-def test_engines_agree_on_js_semantics():
-    """The Rhino-emulation transforms must not be engine-specific."""
-    if len(ENGINES) < 2:
-        pytest.skip("只安装了一个引擎")
-    outs = []
-    for engine in ENGINES:
-        ev = evaluator(engine)
-        outs.append(str(ev.eval("typeof xGod;")))
-    assert len(set(outs)) == 1, f"engines disagree: {dict(zip(ENGINES, outs))}"
 
 
 # -------------------------------------------------- 11. ruleBookInfo.init

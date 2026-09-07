@@ -1,17 +1,10 @@
-"""JavaScript engine integration for legado rules.
+"""QuickJS integration for legado rules.
 
-Handles multiple JS backends: ``quickjs``, ``dukpy`` (QuickJS-backed fallback)
-and ``stpyv8`` (STPyV8 / V8). The ``java`` object mirrors the commonly used
-subset of legado's JsExtensions that is available to rule scripts, and a Rhino
-compatibility prelude (``rhino_compat.js``) supplies ``JavaImporter`` /
-``Packages`` / ``importClass`` / ``importPackage`` so Android-style book sources
-(e.g. 番茄小说) no longer fail with ``ReferenceError: JavaImporter is not
-defined`` on initialization.
-
-Which engine is used is configurable: ``settings.js_engine`` (env
-``VIEWER_JS_ENGINE``, default ``auto``) plus a runtime override written by the
-JS-engine settings API (``backend/data/js_engine.json``). See
-``list_engines`` / ``set_active_engine``.
+QuickJS is the single supported JavaScript runtime. The ``java`` object mirrors
+the commonly used subset of legado's JsExtensions that is available to rule
+scripts, and a Rhino compatibility prelude (``rhino_compat.js``) supplies
+``JavaImporter`` / ``Packages`` / ``importClass`` / ``importPackage`` so
+Android-style book sources (e.g. 番茄小说) can run without a second JS backend.
 """
 from __future__ import annotations
 
@@ -23,7 +16,7 @@ import time
 import urllib.parse
 import zlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .exceptions import JsUnavailableError
 from .rhino_dialect import (
@@ -33,8 +26,8 @@ from .rhino_dialect import (
 )
 
 # Rhino(Java) 兼容预置脚本（JavaImporter / Packages / okhttp3 / hutool / …）。
-# 在创建每个 JS 上下文时、求值书源 jsLib 之前注入，引擎无关（duktape/QuickJS/V8
-# 均为非严格模式），解决 `JavaImporter is not defined`。
+# 在创建每个 QuickJS 上下文时、求值书源 jsLib 之前注入，解决
+# `JavaImporter is not defined`。
 _HERE = Path(__file__).resolve().parent
 _RHINO_COMPAT = (_HERE / "rhino_compat.js").read_text(encoding="utf-8")
 
@@ -49,8 +42,8 @@ _LEGADO_OBJECTS = (_HERE / "legado_objects.js").read_text(encoding="utf-8")
 # `return list(bytes)`——quickjs 桥**不能把 Python list 转成 JS 数组**
 # （InternalError: Can not convert Python result to JS），于是这个吐数组的调用
 # 一求值必炸，device_register 的 catch 再包一层就成了 "network error"。这里在
-# JS 侧用纯 JS 解码 base64，返回 JS number 数组，对 quickjs / dukpy / stpyv8
-# 一视同仁；httpRequest 桥拿到该数组后再还原成字节。
+# JS 侧用纯 JS 解码 base64，返回 JS number 数组；httpRequest 桥拿到该数组后
+# 再还原成字节。
 _B64_BYTES_JS = r"""
 var __vB64Tab = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 var __vB64Map = {};
@@ -69,15 +62,6 @@ function __vB64ToBytes(b64) {
 }
 if (typeof java !== "undefined" && java) java.base64DecodeToByteArray = __vB64ToBytes;
 """
-
-# 可用 JS 引擎注册表：(key, 显示名, import 名)
-_ENGINE_SPECS = [
-    ("quickjs", "QuickJS", "quickjs"),
-    ("stpyv8", "STPyV8 (V8)", "STPyV8"),  # 官方包 import 区分大小写（import STPyV8）
-    ("dukpy", "dukpy (QuickJS 后备)", "dukpy"),
-]
-_ENGINE_KEYS = {k for k, _, _ in _ENGINE_SPECS}
-_ENGINE_TITLES = {k: t for k, t, _ in _ENGINE_SPECS}
 
 _engine_name: str | None = None
 
@@ -98,97 +82,38 @@ def _default_ajax_timeout() -> float:
         return 45.0
 
 
-def _available(key: str) -> bool:
-    """Whether a JS engine module is importable."""
-    pkg = dict((k, p) for k, _, p in _ENGINE_SPECS).get(key)
-    if not pkg:
-        return False
+def _quickjs_available() -> bool:
+    """Whether the sole supported JavaScript runtime is importable."""
     try:
-        importlib.import_module(pkg)  # noqa: F401
+        importlib.import_module("quickjs")  # noqa: F401
         return True
     except Exception:  # noqa: BLE001
         return False
 
 
-def _override_file() -> Path:
-    from ..core.config import DATA_DIR
-
-    return DATA_DIR / "js_engine.json"
-
-
-def _read_override() -> str | None:
-    try:
-        data = json.loads(_override_file().read_text(encoding="utf-8"))
-        val = data.get("engine")
-        return val if isinstance(val, str) else None
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def set_active_engine(name: str) -> None:
-    """Runtime 级切换 JS 引擎（写 backend/data/js_engine.json 并清缓存）。
-
-    下次创建 JsEvaluator 即生效；持久化（含 ``auto``）。
-    """
-    global _engine_name
-    name = (name or "auto").strip().lower()
-    if name not in _ENGINE_KEYS and name != "auto":
-        raise ValueError(
-            f"未知 JS 引擎: {name}（可选: auto, {', '.join(sorted(_ENGINE_KEYS))}）"
-        )
-    _override_file().write_text(json.dumps({"engine": name}), encoding="utf-8")
-    _engine_name = None
-
-
-def _requested_engine() -> str:
-    """运行时覆盖 > 配置项(VIEWER_JS_ENGINE) > auto。"""
-    ov = _read_override()
-    if ov in _ENGINE_KEYS or ov == "auto":
-        return ov
-    from ..core.config import settings
-
-    req = getattr(settings, "js_engine", "auto")
-    return req if (req in _ENGINE_KEYS or req == "auto") else "auto"
-
-
-def _resolve_engine(requested: str) -> str | None:
-    """把「请求/自动」映射到真正可用的引擎 key；装上驱动可安装引擎。"""
-    if requested in _ENGINE_KEYS:
-        return requested if _available(requested) else None
-    # auto：按偏好顺序探测（quickjs > stpyv8 > dukpy）
-    for key, _, _ in _ENGINE_SPECS:
-        if _available(key):
-            return key
-    return None
-
-
 def detect_engine() -> str | None:
-    """Returns effective engine key: 'quickjs', 'stpyv8', 'dukpy', or None."""
+    """Return ``quickjs`` when installed, otherwise ``None``."""
     global _engine_name
-    if _engine_name is not None:
-        return _engine_name
-    _engine_name = _resolve_engine(_requested_engine())
+    if _engine_name != "quickjs":
+        _engine_name = "quickjs" if _quickjs_available() else None
     return _engine_name
 
 
 def list_engines() -> dict:
-    """安装信息 + 当前生效/请求的引擎，供设置 API / 前端展示。"""
+    """Return the installation state of the sole QuickJS runtime."""
     try:
         current = detect_engine()
     except Exception:  # noqa: BLE001
         current = None
     return {
-        "requested": _requested_engine(),
+        "requested": "quickjs",
         "current": current,
-        "items": [
-            {
-                "key": key,
-                "title": title,
-                "installed": _available(key),
-                "current": current == key,
-            }
-            for key, title, _ in _ENGINE_SPECS
-        ],
+        "items": [{
+            "key": "quickjs",
+            "title": "QuickJS",
+            "installed": _quickjs_available(),
+            "current": current == "quickjs",
+        }],
     }
 
 
@@ -238,23 +163,6 @@ def _js_args_unwrapped(fn: Callable[..., Any]) -> Callable[..., Any]:
     def _inner(*args: Any) -> Any:
         return fn(*[_unwrap_arg(a) for a in args])
     return _inner
-
-
-def _stpyv8_unwrap(val: Any, stpyv8: Any) -> Any:
-    """把 STPyV8 求值返回的 JSObject/JSArray 递归转成 dict/list。
-
-    STPyV8：对象 → ``_STPyV8.JSObject``（有 ``keys()``），数组 → 可迭代的
-    ``_STPyV8.JSArray``；基本类型直接是 Python 值。
-    """
-    array_t = getattr(stpyv8, "JSArray", ())
-    obj_t = getattr(stpyv8, "JSObject", ())
-    if array_t and isinstance(val, array_t):
-        return [_stpyv8_unwrap(item, stpyv8) for item in val]
-    if obj_t and isinstance(val, obj_t):
-        return {
-            k: _stpyv8_unwrap(val[k], stpyv8) for k in val.keys()
-        }
-    return val
 
 
 def source_js_lib(source: Any) -> str:
@@ -683,8 +591,7 @@ class JavaBridge:
 
     # --------------------------------------------------- Rhino/okhttp 桥
     # rhino_compat.js 里的 okhttp3 / hutool 类会经这些成员回 Python 真正执行。
-    # 用公开方法名（httpRequest/strBytes），避免 STPyV8 的 JSClass 不暴露
-    # 下划线方法的问题；_http/_strBytes 留作别名。
+    # 保留公开方法名（httpRequest/strBytes）；_http/_strBytes 留作兼容别名。
     def httpRequest(self, method="GET", url="", headers=None, body=None) -> str:
         """okhttp 兼容：真实 HTTP 请求，返回 JSON 字符串 {"code","body","error"}。
 
@@ -810,7 +717,7 @@ class JsEvaluator:
     """Evaluates one JS snippet with legado-style bindings."""
 
     def __init__(self, bindings: dict[str, Any]):
-        self.engine = self._engine_for_this_thread()
+        self.engine = detect_engine()
         self.bridge: JavaBridge = bindings.pop("__bridge__", None) or JavaBridge()
         self.js_lib = source_js_lib(bindings.get("source"))
         # __ns__: 命名空间桥 {name: object}。桥对象的公开方法挂到同名
@@ -830,47 +737,13 @@ class JsEvaluator:
                 pass
         if self.engine == "quickjs":
             self._ctx_quickjs(bindings)
-        elif self.engine == "stpyv8":
-            self._ctx_stpyv8(bindings)
-        elif self.engine == "dukpy":
-            self._ctx_dukpy(bindings)
         else:
             raise JsUnavailableError(
-                "未找到可用的 JavaScript 引擎：请安装 quickjs、stpyv8 或 dukpy"
-                "（pip install quickjs / pip install stpyv8 / pip install dukpy）"
+                "未找到 QuickJS：请执行 pip install quickjs "
                 "以启用书源中的 @js/{{}} 规则"
             )
 
     # ------------------------------------------------- namespace bridges
-    @staticmethod
-    def _engine_for_this_thread() -> str | None:
-        """Pick an engine that is safe on the *current* thread.
-
-        STPyV8 embeds a single V8 isolate: once a context exists, touching
-        STPyV8 from another thread is an access violation that kills the
-        process outright (cloudflare/stpyv8#100) — no Python exception, no
-        chance to clean up. Callers such as ``content_purify`` and
-        ``source_login`` run JS inside a thread pool, so honouring an
-        ``stpyv8`` selection there would take the whole server down.
-
-        Off the main thread we therefore fall back to a thread-safe engine
-        (quickjs, else dukpy) and keep working instead.
-        """
-        engine = detect_engine()
-        if engine != "stpyv8":
-            return engine
-        try:
-            import threading
-
-            if threading.current_thread() is threading.main_thread():
-                return engine
-        except Exception:  # noqa: BLE001
-            return engine
-        for fallback in ("quickjs", "dukpy"):
-            if _available(fallback):
-                return fallback
-        return engine
-
     @staticmethod
     def _ns_methods(obj: Any) -> list[str]:
         # 收集公开方法，并额外保留单下划线内部方法：rhino_compat.js 里的类
@@ -961,203 +834,18 @@ class JsEvaluator:
             raise JsUnavailableError(f"JS 绑定初始化失败: {exc}") from exc
         self._quickjs_ctx = ctx
 
-    # --------------------------------------------------------------- dukpy
-    def _ctx_dukpy(self, bindings: dict[str, Any]) -> None:
-        import dukpy
-
-        interp = dukpy.JSInterpreter()
-        names: list[str] = []
-        for name in self._ns_methods(self.bridge):
-            fn = getattr(self.bridge, name, None)
-            if fn is None or not callable(fn):
-                continue
-            interp.export_function(f"java.{name}", fn)
-            names.append(name)
-        lines: list[str] = ["var java = {};"]
-        for name in names:
-            lines.append(
-                f"java['{name}'] = function() {{ var args = ['java.{name}']"
-                f".concat(Array.prototype.slice.call(arguments)); "
-                f"return globalThis.call_python.apply(null, args); }};"
-            )
-        self._ns_names: set[str] = set()
-        for ns, obj in self.ns_bridges.items():
-            if not ns.isidentifier():
-                continue
-            self._ns_names.add(ns)
-            ns_names: list[str] = []
-            for name in self._ns_methods(obj):
-                fn = getattr(obj, name, None)
-                if fn is None:
-                    continue
-                interp.export_function(f"{ns}.{name}", fn)
-                ns_names.append(name)
-            lines.append(f"var {ns} = {{}};")
-            for name in ns_names:
-                lines.append(
-                    f"{ns}['{name}'] = function() {{ var args = ['{ns}.{name}']"
-                    f".concat(Array.prototype.slice.call(arguments)); "
-                    f"return globalThis.call_python.apply(null, args); }};"
-                )
-        if "cookie" not in self.ns_bridges:
-            lines.append("var cookie = {}; cookie.getKey = function(){ return ''; };")
-        if "cache" not in self.ns_bridges:
-            lines.append("var cache = java;")
-        # 兼容层：JavaImporter/Packages/okhttp3/hutool（须于 jsLib 之前）
-        lines.append(_RHINO_COMPAT)
-        lines.append(_LEGADO_OBJECTS)
-        lines.append(LEAK_HELPER_JS)
-        lines.append(_B64_BYTES_JS)
-        if self.js_lib:
-            # dukpy keeps a persistent global scope per interpreter: evaluating
-            # the jsLib during the validation run defines its functions for all
-            # subsequent evaljs() calls on this interpreter.
-            lines.append(self.js_lib)
-        for k, v in bindings.items():
-            if not k.isidentifier():
-                continue
-            if k in self._ns_names:
-                # 字段在预检运行时合并进 ns 对象（dukpy 全局作用域持久）
-                lines.append(
-                    f"(function(){{var d=dukpy['{k}'];"
-                    f"if(d){{for(var p in d){{{k}[p]=d[p];}}}}}})();"
-                )
-                continue
-            lines.append(f"var {k} = dukpy['{k}'];")
-        self._dukpy_interp = interp
-        self._dukpy_prelude = "\n".join(lines)
-        self._dukpy_vars = {k: _safe_json(v) for k, v in bindings.items()}
-        # validate prelude compiles by running it once with vars present
-        try:
-            interp.evaljs(self._dukpy_prelude + "\n0;", **self._dukpy_vars)
-        except Exception as exc:  # noqa: BLE001
-            raise JsUnavailableError(f"JS 绑定初始化失败: {exc}") from exc
-
-    # -------------------------------------------------------------- stpyv8
-    # STPyV8（V8 内核）后端。dukpy 与它都以「持久全局作用域」工作，因此把
-    # 绑定变量并入 ``_dukpy_vars``，每次 eval 前重绑。
-    def _ctx_stpyv8(self, bindings: dict[str, Any]) -> None:
-        import STPyV8 as stpyv8  # noqa: N813 — 官方包名区分大小写
-
-        self._dukpy_vars = {k: _safe_json(v) for k, v in bindings.items()}
-        self._ns_names: set[str] = {
-            ns for ns in self.ns_bridges if ns.isidentifier()
-        }
-        # STPyV8 用 JSClass 作为全局对象（JSContext(global_object=…)），其方法成为
-        # JS 顶层可调用全局；这里是「桥 -> JSClass 方法」的转发器，保留桥实例状态
-        # （如 _owner），且用 staticmethod 避免 JSClass 把实例自身塞进参数。
-        # 注意：STPyV8 的 JSClass 不暴露下划线方法，内部桥统一用公开名
-        # httpRequest/strBytes（见 rhino_compat.js）；上下文不可跨线程共享
-        # （cloudflare/stpyv8#100），JsEvaluator 按解析独立创建以满足此约束。
-        attrs: dict[str, Any] = {}
-
-        def _forward(fn: Callable[..., Any]) -> Callable[..., Any]:
-            # JS 对象实参经 STPyV8 会以 JSObject/JSArray 传入（而非 dict/list）；
-            # 转发前递归转成 Python 基本类型，确保桥方法拿到 dict。
-            def inner(*a: Any, **k: Any) -> Any:
-                return fn(*[_stpyv8_unwrap(x, stpyv8) for x in a], **k)
-            return inner
-
-        for name in self._ns_methods(self.bridge):
-            fn = getattr(self.bridge, name, None)
-            if fn is None or not callable(fn):
-                continue
-            attrs[name] = staticmethod(_forward(fn))
-        for ns, obj in self.ns_bridges.items():
-            if ns not in self._ns_names:
-                continue
-            for name in self._ns_methods(obj):
-                fn = getattr(obj, name, None)
-                if fn is None or not callable(fn):
-                    continue
-                attrs[f"{ns}__{name}"] = staticmethod(_forward(fn))
-        bridge_cls = type("ViewerStpyv8Bridge", (stpyv8.JSClass,), attrs)
-        ctxt = stpyv8.JSContext(obj=bridge_cls())
-        ctxt.enter()
-
-        lines: list[str] = [self._ns_bridge_js_stpyv8(), _RHINO_COMPAT,
-                            _LEGADO_OBJECTS, LEAK_HELPER_JS, _B64_BYTES_JS]
-        if self.js_lib:
-            lines.append(self.js_lib)
-        for k in list(self._dukpy_vars):
-            if not k.isidentifier():
-                continue
-            if k in self._ns_names:
-                # 命名空间对象（source/cache/cookie/…）是**桥对象**：上面已经
-                # 挂好了 .get/.put/.getLoginInfoMap 等方法，这里不能再
-                # `var source = {...}` 整体覆盖，否则方法全丢。改为把书源
-                # 数据字段逐个并进去（字段与方法同名时以桥方法为准）。
-                lines.append(
-                    f"(function (d) {{ for (var key in d) {{"
-                    f" if (!Object.prototype.hasOwnProperty.call({k}, key))"
-                    f" {k}[key] = d[key]; }} }})"
-                    f"({json.dumps(self._dukpy_vars[k], ensure_ascii=False)});"
-                )
-                continue
-            lines.append(
-                f"var {k} = {json.dumps(self._dukpy_vars[k], ensure_ascii=False)};"
-            )
-        try:
-            ctxt.eval("\n".join(lines))
-        except Exception as exc:  # noqa: BLE001
-            raise JsUnavailableError(f"JS 绑定初始化失败: {exc}") from exc
-        self._stpyv8_ctx = ctxt
-
-    def _ns_bridge_js_stpyv8(self) -> str:
-        """用 JS 包装 STPyV8 暴露的全局可调用对象成 java / ns 对象成员。
-
-        顶层可调用对象命名：桥方法 name → 全局 name；ns 方法 → 全局
-        ``{ns}__{name}``。这里把它们挂到 java.{name} 与 {ns}.{name}。
-        """
-        lines = ["var java = {};"]
-        for name in self._ns_methods(self.bridge):
-            # 经 globalThis['name'] 取全局（桥方法可能是 JS 保留字如 delete，
-            # 不能写成 `java['x'] = x;` 这种裸标识符引用）
-            lines.append(f"java['{name}'] = globalThis['{name}'];")
-        for ns in self.ns_bridges:
-            if ns not in self._ns_names:
-                continue
-            lines.append(f"var {ns} = {{}};")
-            for name in self._ns_methods(self.ns_bridges[ns]):
-                lines.append(f"{ns}['{name}'] = {ns}__{name};")
-        if "cookie" not in self.ns_bridges:
-            lines.append("var cookie = {}; cookie.getKey = function(){ return ''; };")
-        if "cache" not in self.ns_bridges:
-            lines.append("var cache = java;")
-        return "\n".join(lines)
-
-    def _eval_stpyv8(self, code: str) -> Any:
-        import STPyV8
-
-        ns_names = getattr(self, "_ns_names", set())
-        pre = ""
-        for k, v in self._dukpy_vars.items():
-            if not k.isidentifier() or k in ns_names:
-                continue
-            pre += f"var {k} = {json.dumps(v, ensure_ascii=False)};"
-        raw = self._stpyv8_ctx.eval(pre + "\n" + code + "\n;")
-        return _stpyv8_unwrap(raw, STPyV8)
-
     # ----------------------------------------------------------------- eval
     def set_binding(self, key: str, value: Any) -> None:
-        """原地更新一个绑定变量（如逐条规则变化中的 result）。
-
-        quickjs：直接在既有上下文里重定义 var；dukpy：vars 每次求值时
-        传入，更新字典即可。两者都无需重建运行时。
-        """
+        """在现有 QuickJS 上下文中更新绑定变量。"""
         if not key.isidentifier():
             return
         value = _safe_json(value)
-        if self.engine == "quickjs":
-            try:
-                self._quickjs_ctx.eval(
-                    f"globalThis.{key} = {json.dumps(value, ensure_ascii=False)};"
-                )
-            except Exception as exc:  # noqa: BLE001
-                raise JsUnavailableError(f"JS 绑定更新失败: {exc}") from exc
-        else:
-            # dukpy / stpyv8：vars 每次求值时传入，更新字典即可
-            self._dukpy_vars[key] = value
+        try:
+            self._quickjs_ctx.eval(
+                f"globalThis.{key} = {json.dumps(value, ensure_ascii=False)};"
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise JsUnavailableError(f"JS 绑定更新失败: {exc}") from exc
 
     def eval(self, code: str) -> Any:
         # Rhino 的直接 eval 会把 `let`/`const` 泄漏到外层作用域，书源靠这个
@@ -1165,25 +853,7 @@ class JsEvaluator:
         # ES6 不泄漏，这里在求值前把 eval(...) 改写成等价的 __rhinoEval(...)。
         code = normalize_eval_leak(code)
         try:
-            if self.engine == "quickjs":
-                result = js_unwrap(self._quickjs_ctx.eval(code))
-            elif self.engine == "stpyv8":
-                result = self._eval_stpyv8(code)
-            else:
-                # dukpy 的全局作用域跨 evaljs 持久，但预检只执行过一次
-                # 「var x = dukpy['x']」绑定；set_binding 更新的是传入的
-                # vars 字典。因此每次求值前先把当前 vars 重绑到全局，
-                # 保证规则读到的是最新值。ns 桥（source 等）的字段已在
-                # 预检时合并进带方法的对象，重绑会抹掉方法，必须跳过。
-                ns_names = getattr(self, "_ns_names", set())
-                binds = ";".join(
-                    f"{k} = dukpy[{json.dumps(k)}]"
-                    for k in self._dukpy_vars
-                    if k.isidentifier() and k not in ns_names
-                )
-                result = self._dukpy_interp.evaljs(
-                    binds + "\n" + code + "\n;", **self._dukpy_vars
-                )
+            result = js_unwrap(self._quickjs_ctx.eval(code))
         except JsUnavailableError:
             raise
         except Exception as exc:  # noqa: BLE001

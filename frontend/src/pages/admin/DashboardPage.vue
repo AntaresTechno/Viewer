@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { MiuixButton, MiuixCard, MiuixProgressIndicator, MiuixText } from "miuix-vue";
+import { onMounted, ref } from "vue";
+import { MiuixCard, MiuixProgressIndicator, MiuixText } from "miuix-vue";
 import { api } from "@/api/client";
 import type { DashboardSummary, JsEngines } from "@/api/client";
 import { useAuth } from "@/stores/auth";
@@ -10,20 +10,13 @@ const data = ref<DashboardSummary | null>(null);
 const loading = ref(true);
 const error = ref("");
 
-// ---- JS 引擎设置 ----
+// ---- QuickJS 状态 ----
 const js = ref<JsEngines | null>(null);
-const jsSel = ref("auto");
-const jsMsg = ref("");
-const jsBusy = ref(false);
-const canManageJs = computed(
-  () => auth.isSuperuser || auth.can("js.manage"),
-);
 
 onMounted(async () => {
   try {
     data.value = await api.dashboard();
     js.value = (await api.jsEngines().catch(() => null)) ?? null;
-    if (js.value) jsSel.value = js.value.requested || "auto";
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -31,25 +24,11 @@ onMounted(async () => {
   }
 });
 
-async function applyJsEngine() {
-  jsMsg.value = "";
-  jsBusy.value = true;
-  try {
-    js.value = await api.jsSetEngine(jsSel.value);
-    jsMsg.value = "已切换，新值对之后的书源规则生效";
-  } catch (e) {
-    jsMsg.value = String(e);
-  } finally {
-    jsBusy.value = false;
-  }
-}
-
 const cards = [
   ["users_total", "用户", "/admin/users"],
   ["sources_total", "书源", "/admin/sources"],
   ["shelf_total", "书架条目", "/shelf"],
   ["roles_total", "权限组", "/admin/roles"],
-  ["plugins_total", "插件（启用/总数）", "/admin/plugins"],
 ] as const;
 </script>
 
@@ -65,14 +44,22 @@ const cards = [
           class="stat"
           @click="$router.push(to)"
         >
-          <MiuixText type="title1">
-            {{
-              k === "plugins_total"
-                ? `${data.plugins_enabled}/${data.plugins_total}`
-                : data[k]
-            }}
-          </MiuixText>
+          <MiuixText type="title1">{{ data[k] }}</MiuixText>
           <div class="stat-label">{{ label }}</div>
+        </MiuixCard>
+        <MiuixCard
+          class="stat component-stat"
+          @click="$router.push('/admin/plugins')"
+        >
+          <MiuixText type="title1">
+            {{ data.plugins_total + data.rule_engines_total + data.core_modules_total }}
+          </MiuixText>
+          <div class="stat-label">组件</div>
+          <div class="component-breakdown">
+            <span>插件 <b>{{ data.plugins_enabled }}/{{ data.plugins_total }}</b></span>
+            <span>规则引擎 <b>{{ data.rule_engines_enabled }}/{{ data.rule_engines_total }}</b></span>
+            <span>核心模块 <b>{{ data.core_modules_total }}</b></span>
+          </div>
         </MiuixCard>
       </div>
 
@@ -93,43 +80,20 @@ const cards = [
         </table>
       </MiuixCard>
 
-      <!-- JS 引擎 -->
+      <!-- QuickJS -->
       <MiuixCard class="recent" :show-indication="false">
-        <h3>JS 引擎</h3>
+        <h3>QuickJS</h3>
         <p class="js-desc">
-          书源 @js/{{ "{" }}{{ "{" }}{{ "}" }}{{ "}" }} / jsLib 规则的 JS 运行时。
+          书源 @js/{{ "{" }}{{ "{" }}{{ "}" }}{{ "}" }} / jsLib 规则固定使用 QuickJS。
           番茄等依赖 Rhino 兼容（JavaImporter/Packages）的源已默认注入兼容层。
         </p>
         <div v-if="js" class="js-row">
-          <label class="eng-label" for="js-engine">引擎</label>
-          <select
-            id="js-engine"
-            v-model="jsSel"
-            class="eng-select"
-            :disabled="!canManageJs || jsBusy"
-          >
-            <option value="auto">自动选择（推荐）</option>
-            <option
-              v-for="it in js.items"
-              :key="it.key"
-              :value="it.key"
-              :disabled="!it.installed"
-            >
-              {{ it.title }}{{ it.installed ? "" : "（未安装）" }}
-              {{ it.current ? "· 当前" : "" }}
-            </option>
-          </select>
-          <MiuixButton
-            v-if="canManageJs"
-            type="primary"
-            :disabled="jsBusy"
-            @click="applyJsEngine"
-          >
-            应用
-          </MiuixButton>
+          <span class="engine-name">QuickJS</span>
+          <span class="engine-state" :class="{ ready: js.current === 'quickjs' }">
+            {{ js.current === "quickjs" ? "已安装并启用" : "未安装" }}
+          </span>
         </div>
-        <div v-else class="js-desc">JS 引擎状态不可用（无 js.read 权限或插件未启用）。</div>
-        <p v-if="jsMsg" class="js-msg">{{ jsMsg }}</p>
+        <div v-else class="js-desc">QuickJS 状态不可用（无 js.read 权限）。</div>
       </MiuixCard>
 
       <p v-if="auth.isSuperuser" class="tip">
@@ -155,6 +119,27 @@ const cards = [
   font-size: 13px;
   margin-top: 6px;
 }
+.component-stat { grid-column: span 2; }
+.component-breakdown {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.component-breakdown span {
+  padding: 7px 8px;
+  border-radius: 10px;
+  background: var(--m-color-surface-container-high);
+  color: var(--m-color-on-surface-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.component-breakdown b {
+  display: block;
+  margin-top: 2px;
+  color: var(--m-color-on-surface);
+  font-size: 13px;
+}
 .recent {
   --app-card-pad: 18px;
   margin-top: 20px;
@@ -177,24 +162,10 @@ const cards = [
   gap: 12px;
   flex-wrap: wrap;
 }
-.eng-label {
-  font-size: 13px;
-  color: var(--m-color-on-surface-secondary);
-}
-.eng-select {
-  flex: 1;
-  min-width: 200px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--m-color-on-surface) 20%, transparent);
-  border-radius: var(--app-radius-input, 12px);
-  background: var(--m-color-surface-container);
-  color: var(--m-color-on-surface);
-  font-size: 14px;
-  font-family: inherit;
-}
-.js-msg {
-  color: var(--m-color-primary);
-  font-size: 13px;
-  margin: 10px 0 0;
+.engine-name { font-size: 14px; font-weight: 600; color: var(--m-color-on-surface); }
+.engine-state { padding: 4px 9px; border-radius: 999px; background: var(--m-color-error-container); color: var(--m-color-on-error-container); font-size: 12px; }
+.engine-state.ready { background: var(--m-color-primary-container); color: var(--m-color-on-primary-container); }
+@media (max-width: 520px) {
+  .component-stat { grid-column: 1 / -1; }
 }
 </style>

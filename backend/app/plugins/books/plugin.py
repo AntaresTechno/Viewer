@@ -28,7 +28,8 @@ if TYPE_CHECKING:
 _DL_JOBS: dict[str, dict] = {}
 
 
-meta = {
+PLUGIN = {
+    "kind": "core",
     "name": "books",
     "mount": "books",
     "title": "书城",

@@ -1,13 +1,20 @@
 """Tests for the pluggable source-engine architecture."""
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from app.plugins.registry import (
     PluginContext,
     all_engines,
+    all_plugins,
     discover_plugins,
     engine_keys,
     get_engine,
+    plugin_enabled,
     set_disabled_plugins,
+    toggle_plugin,
 )
 
 
@@ -58,3 +65,35 @@ class TestEngineRegistry:
         assert callable(info.create_router)
         assert ("legado.login", "管理书源登录（登录/退出/登录头/Cookie）") \
             in info.permissions
+
+    def test_builtin_components_declare_three_kinds(self):
+        discover_plugins(force=True)
+        by_name = {item.name: item for item in all_plugins()}
+        assert by_name["engine_legado"].kind == "engine"
+        assert by_name["rss"].kind == "plugin"
+        assert by_name["auth"].kind == "core"
+        assert {item.kind for item in by_name.values()} == {"engine", "plugin", "core"}
+        builtin_names = {
+            "auth",
+            "books",
+            "content_purify",
+            "dashboard",
+            "engine_legado",
+            "home",
+            "js_engine",
+            "plugins",
+            "roles",
+            "rss",
+            "users",
+            "webdav",
+        }
+        assert all(not by_name[name].legacy_manifest for name in builtin_names)
+
+    def test_core_module_cannot_be_disabled(self):
+        set_disabled_plugins({"auth"})
+        try:
+            assert plugin_enabled("auth") is True
+            with pytest.raises(ValueError, match="core module"):
+                asyncio.run(toggle_plugin("auth", False))
+        finally:
+            set_disabled_plugins(set())

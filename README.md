@@ -25,7 +25,7 @@ viewer/
 |---|---|
 | [部署指南](docs/deployment.md) | 长期对外部署：systemd 常驻、反向代理/HTTPS、安全加固、备份与升级 |
 | [环境安装指南](docs/installation-guide.md) | 本机安装 / 二次开发：一键脚本、手动安装、`.env` 配置、FAQ |
-| [插件规范](docs/plugin-spec.md) | 插件结构 / `meta` / 工厂合约 / 编码约定 / 新增插件模板 |
+| [插件规范](docs/plugin-spec.md) | 三类组件 / `PLUGIN` 声明 / 工厂合约 / 编码约定 / 新增插件模板 |
 | [架构总览](docs/architecture.md) | 插件架构与模块关系 |
 | [规则语义规格](docs/spec/*.md) | Legado 规则引擎三份语义规格（由本仓库 `legado-with-MD3-main` 源码整理） |
 
@@ -44,7 +44,7 @@ uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 
 - 数据库自动创建于 `backend/data/viewer.db`，并种子三个系统权限组与默认管理员：
   - **admin / view123456**（超级管理员，`*` 权限）
-- 默认引擎为 **quickjs**（稳定）。`auto` 自动择优：quickjs > stpyv8 > dukpy。可选的 `stpyv8`（V8）因 isolate 不能跨线程、并发多 context 偶尔原生崩溃，仅作特定兼容需求用；必要时在「仪表盘 → JS 引擎」切回自动。番茄等依赖 Rhino `JavaImporter`/`Packages` 的书源已内置兼容层。
+- 书源脚本固定使用 **QuickJS**，不再提供运行时切换或其他 JS 后端。番茄等依赖 Rhino `JavaImporter`/`Packages` 的书源已内置兼容层。
 - 书源解析失败 `ReferenceError: JavaImporter is not defined` 已修复：每次创建 JS 上下文都注入 `rhino_compat.js`（`JavaImporter`/`importClass`/`importPackage`/`Packages` + okhttp3/hutool 兼容类）。
 
 ### 前端
@@ -76,21 +76,28 @@ npm run dev          # 或开发模式（5173 端口代理 /api → 8000）
 | 认证 | 注册、登录（JWT 14 天）、个人资料（昵称/邮箱/简介/头像色相）、改密 |
 | 权限组 | 角色 CRUD、按插件聚合的权限目录（`ns.key` 命名空间 + 通配 `ns.*` 与全局 `*`）、用户↔多角色 |
 | 用户管理 | 关键字分页搜索、启停、超管开关（自我保护约束）、重置密码、删除 |
-| 插件管理 | 列出全部 API 插件并启停（重启生效），仅超级管理员 |
+| 插件管理 | 按规则引擎 / 插件 / 核心模块分区展示；可选组件可启停，核心模块固定启用；仅超级管理员 |
 | 仪表盘 | 用户/书源/书架/角色/插件统计 + 最近注册 |
 | 书城 | 书源导入（URL 或粘贴 legado JSON）、启停/删除；并发搜索（信号量 6、单源 25s 超时）；详情/目录（含 nextTocUrl 分页）/正文（含 nextContentUrl 合并翻页）；封面代理；书架与阅读进度 |
+| 订阅 | 兼容 md3-legado `RssSource` JSON；RSS/Atom 默认解析及 `ruleArticles` 自定义规则；分类、搜索、翻页、正文阅读、已读和收藏；订阅源导入/导出/启停/删除 |
 | 首页 | 侧栏「首页」选项卡（打开网站仍默认进书架）：最近阅读续读入口、今日/累计阅读时长、累计天数与在读本数、连续阅读天数、近 14 天柱状图、书架「有更新」提醒；阅读器每 30s 心跳上报在读时长（home 插件） |
 | WebDAV | 把书架/阅读进度/阅读统计备份到任意 WebDAV 网盘（坚果云/Alist 等）：配置测试、立即备份、云端列表恢复/删除，支持每日自动备份（webdav 插件） |
 | 自动更新 | 每天定时拉取书架全部书籍的最新目录（默认凌晨 4 点，`VIEWER_DAILY_REFRESH_HOUR` 可调），检测到新章的书架条目标记「有更新」，书架可按 加入时间 / 最近更新 / 最后阅读 排序 |
 
 ## 插件架构
 
-每个插件是 `app/plugins/<name>/plugin.py`，支持两种形态（可同时具备）：
+每个后端组件位于 `app/plugins/<name>/plugin.py`，统一通过 `PLUGIN.kind`
+声明为 `engine`（规则引擎）、`plugin`（可选插件）或 `core`（核心模块）：
 
-**API 插件** —— 暴露 `meta` + `create_router(ctx)`，挂载到 `/api/<mount>`：
+**组件与 API 声明** —— 带 `create_router(ctx)` 时挂载到 `/api/<mount>`：
 
 ```python
-meta = {"name": "auth", "mount": "auth", "permissions": [("auth.basic", "基础登录权限")], ...}
+PLUGIN = {
+    "kind": "plugin",
+    "name": "example",
+    "mount": "example",
+    "permissions": [("example.read", "查看示例")],
+}
 def create_router(ctx) -> APIRouter: ...
 ```
 
@@ -111,7 +118,7 @@ def create_engine(ctx) -> LegadoEngine: ...
 选择。要接入新的规则体系（私有 JSON 协议、其他 App 的书源格式等），只需新增
 一个引擎插件包，无需改动 books 插件。
 
-启动时注册器扫描并挂载 API 插件；`meta.permissions` 聚合成站点权限目录供「权限组」界面勾选。停用状态存于 `plugin_states` 表（引擎插件停用后其解析立即不可用）。
+启动时注册器扫描并挂载组件；`PLUGIN.permissions` 聚合成站点权限目录供「权限组」界面勾选。插件和规则引擎的停用状态存于 `plugin_states` 表；核心模块始终启用且不能被插件 ZIP 覆盖。旧版 `meta` 仍可兼容读取并自动推断类型。
 
 ## Legado 规则引擎兼容性
 

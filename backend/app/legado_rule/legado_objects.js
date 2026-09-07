@@ -12,7 +12,7 @@
  *
  * The Python side therefore returns JSON *strings*, and this prelude turns them
  * back into objects. Injected after rhino_compat.js and before the source
- * jsLib, for every engine (quickjs / dukpy / stpyv8).
+ * jsLib in QuickJS.
  */
 /* eslint-disable */
 
@@ -300,7 +300,7 @@
       try {
         infoMap = new Proxy(_infoMapProxy, _infoMapHandler);
       } catch (e) {
-        // 引擎不支持 Proxy（dukpy/旧 quickjs）时退回「数据 + 方法」的
+        // 旧 QuickJS 不支持 Proxy 时退回「数据 + 方法」的
         // 平铺对象：下标读取能用，只是新增键不落盘。
         infoMap = _infoMapProxy;
       }

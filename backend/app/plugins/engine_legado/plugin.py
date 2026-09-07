@@ -23,7 +23,8 @@ from fastapi import APIRouter
 if TYPE_CHECKING:
     from ...plugins.registry import PluginContext
 
-meta = {
+PLUGIN = {
+    "kind": "engine",
     "name": "engine_legado",
     "mount": "legado",
     "title": "Legado 书源引擎",
@@ -127,7 +128,7 @@ def create_engine(ctx: "PluginContext") -> LegadoEngine:
 def create_router(ctx: "PluginContext") -> APIRouter:
     """书源登录端点（/api/legado/login/*）。
 
-    注意：按 docs/plugin-spec.md §7，API 插件不开 future-annotations，
+    注意：按 docs/plugin-spec.md §7，带 API 的组件不开 future-annotations，
     请求体模型定义在本函数内部。
     """
     import asyncio

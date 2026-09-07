@@ -14,6 +14,7 @@ const router = createRouter({
         { path: "", redirect: "/shelf" },
         { path: "home", component: () => import("@/pages/HomePage.vue") },
         { path: "shelf", component: () => import("@/pages/ShelfPage.vue") },
+        { path: "rss", component: () => import("@/pages/RssPage.vue") },
         { path: "search", component: () => import("@/pages/SearchPage.vue") },
         { path: "explore", component: () => import("@/pages/ExplorePage.vue") },
         { path: "library", component: () => import("@/pages/LocalLibraryPage.vue") },
@@ -62,6 +63,10 @@ const router = createRouter({
         {
           path: "admin/sources",
           component: () => import("@/pages/admin/SourcesPage.vue"),
+        },
+        {
+          path: "admin/rss-sources",
+          component: () => import("@/pages/admin/RssSourcesPage.vue"),
         },
       ],
     },

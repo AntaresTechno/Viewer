@@ -133,7 +133,7 @@ class TestCookieStore:
 
 
 # ---------------------------------------------------------------- login ui
-@pytest.mark.skipif(not _js_available(), reason="需要 quickjs/dukpy")
+@pytest.mark.skipif(not _js_available(), reason="需要 QuickJS")
 class TestLoginUi:
     def test_rows_and_defaults(self, state_file):
         rows = source_login.login_rows(_SOURCE)
@@ -159,7 +159,7 @@ class TestLoginUi:
             "https://www.example.com/") is None
 
 
-@pytest.mark.skipif(not _js_available(), reason="需要 quickjs/dukpy")
+@pytest.mark.skipif(not _js_available(), reason="需要 QuickJS")
 class TestRunLogin:
     def test_login_flow(self, state_file):
         source_state.put_login_info(_SOURCE["bookSourceUrl"],
@@ -192,7 +192,7 @@ class TestRunLogin:
         assert source_state.get_login_info(src["bookSourceUrl"]) is None
 
 
-@pytest.mark.skipif(not _js_available(), reason="需要 quickjs/dukpy")
+@pytest.mark.skipif(not _js_available(), reason="需要 QuickJS")
 class TestRunAction:
     def test_button_action_js(self, state_file):
         result = source_login.run_action(_SOURCE, "go")

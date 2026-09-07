@@ -6,7 +6,7 @@
 2. **净化**      先跑「内置净化 · MD3 版」（``md3_builtin_clean``，移植自
    legado MD3 版 ``HtmlFormatter.formatKeepImg`` 的内置净化层），再按
    (规则序) 套用启用规则包内的规则；替换式支持纯文本、Python 正则与
-   legado 的 ``@js:`` JS 替换（经 quickjs/dukpy 桥执行）；
+   legado 的 ``@js:`` JS 替换（经 QuickJS 桥执行）；
 3. **存入缓存**  结果连同原文写入 ``purified_contents``，并记录规则指纹；
 4. **调用**      再次请求时指纹一致直接返回缓存；规则变化时用原文本地
    重新净化（不回源）；抓取失败时兜底返回旧净化结果/本地书库正文。

@@ -24,7 +24,7 @@
 
 | 层 | 技术 |
 |---|---|
-| 后端 | Python ≥3.11、FastAPI、SQLAlchemy 2 (async) + aiosqlite、PyJWT、httpx、lxml/jsonpath-ng、JS 引擎 quickjs/dukpy/stpyv8 + `rhino_compat.js` |
+| 后端 | Python 3.11–3.13、FastAPI、SQLAlchemy 2 (async) + aiosqlite、PyJWT、httpx、lxml/jsonpath-ng、QuickJS + `rhino_compat.js` |
 | 前端 | Vite 6、Vue 3.5、TypeScript、Pinia、vue-router 4、axios、miuix-vue（Miuix/MD3 双设计系统）、motion-v |
 | 存储 | 单文件 SQLite：`backend/data/viewer.db`；磁盘缓存 `backend/data/cache/img`（封面图）与本地书库表 |
 | 部署 | `npm run build` 产物由后端 SPA 挂载直接服务，单端口 `http://127.0.0.1:8000/` 即整站 |
@@ -149,7 +149,7 @@ pydantic-settings，环境变量前缀 `VIEWER_`（大写字段名），支持 `
 | `analyzer_regex.py` | 多段正则链式提取 |
 | `analyzer_xpath.py` | XPath 取值器（JsoupXpath 方言子集） |
 | `web_book.py` | 搜索/详情/目录/正文四大流程编排（对应 BookList/BookInfo/BookChapterList/BookContent.kt） |
-| `js_bridge.py` | JS 引擎桥：quickjs / stpyv8 / dukpy 可切换（`settings.js_engine` + 运行期覆盖）；注入 `rhino_compat.js`（JavaImporter/Packages/okhttp3/hutool 兼容）；提供镜像 legado JsExtensions 子集的 `java` 对象及 `httpRequest`/`md5Encode`/`base64*` 等桥 |
+| `js_bridge.py` | 固定使用 QuickJS；注入 `rhino_compat.js`（JavaImporter/Packages/okhttp3/hutool 兼容）；提供镜像 legado JsExtensions 子集的 `java` 对象及 `httpRequest`/`md5Encode`/`base64*` 等桥 |
 | `rhino_compat.js` | Rhino(Java) 兼容预置脚本：`JavaImporter`/`importClass`/`importPackage`/`Packages` + okhttp3/hutool/android 兼容类，修复 `JavaImporter is not defined` |
 | `net.py` | httpx 连接池 HTTP 层（keep-alive、charset 探测） |
 | `source_degradation/` | 源能力适配器层：引擎核心保持「读规则→执行规则」，对真实书源需要的备用读取路径（如登录门禁源的访客降级）以 `GuestReadAdapter` hook 表达，按域自注册（默认番茄）。引擎主流程只问 `guest_reader_for(source)`，不 import 任何书源专用模块。详见 `docs/decouple-fanqie.md` |
@@ -161,53 +161,57 @@ pydantic-settings，环境变量前缀 `VIEWER_`（大写字段名），支持 `
 
 ## 三、插件系统
 
-### 3.1 两种插件形态（`backend/app/plugins/registry.py`）
+### 3.1 三类组件声明（`backend/app/plugins/registry.py`）
 
-每个插件是 `app/plugins/<name>/plugin.py`，可声明其一或兼有：
+每个组件位于 `app/plugins/<name>/plugin.py`，使用统一的 `PLUGIN` 清单声明类型：
 
 ```python
-# 形态一：API 插件 → 挂载到 /api/<mount>
-meta = {"name": "auth", "mount": "auth", "order": 10,
-        "title": "...", "version": "...", "description": "...",
-        "permissions": [("auth.basic", "基础登录权限"), ...]}
+# kind: engine（规则引擎）/ plugin（可选插件）/ core（核心模块）
+PLUGIN = {"kind": "plugin", "name": "example", "mount": "example",
+          "order": 100, "title": "...", "version": "...",
+          "description": "...", "permissions": [("example.read", "查看"), ...]}
 def create_router(ctx) -> APIRouter: ...
 
-# 形态二：源规则引擎插件 → 注册进引擎表，无 HTTP 端点
+# kind=engine 还必须提供引擎声明；也可以同时附带管理 API
 ENGINE = {"key": "legado", "title": "Legado 书源", "version": "...", "description": "..."}
 def create_engine(ctx) -> LegadoEngine: ...
 # 引擎对象需实现 async 方法：search_book / book_info / get_toc / get_content
 # （legado 实现另含 explore_kinds / explore_book）
 ```
 
+- **兼容**：旧 `meta` 仍可读取；包含 `ENGINE + create_engine` 时推断为 `engine`，否则推断为 `plugin`，管理页标记为“旧声明”。
 - **扫描**：`pkgutil.iter_modules` 遍历包路径，导入 `<name>/plugin.py`；单个插件导入失败只打印告警，不影响其他插件；结果按 `(order, name)` 缓存。
 - **PluginContext**：注入共享能力——`settings`、`ctx.engine`（SQLAlchemy 异步引擎，注意与书源引擎同名不同物）、`ctx.session_factory()`。
 - **引擎实例**按 key 在 `_INSTANCE_CACHE` 单例化；`get_engine(key)` 缺省/兜底均为 `"legado"`，引擎所属插件停用时抛 `KeyError`。
 
 ### 3.2 启停机制（`plugin_states` 表）
 
-- 启动时：启用集合 = 已发现插件 − 库中 `enabled=False` 行；被停用的 API 插件**不挂载路由**（需重启生效）。
-- 运行时：toggle 端点写库并同步内存 `_DISABLED_PLUGINS` —— **引擎插件的解析能力立即不可用**；API 插件的路由卸载仍需重启（接口文案注明）。
+- 启动时：插件/规则引擎的启用集合 = 已发现组件 − 库中 `enabled=False` 行；被停用的 API **不挂载路由**（需重启生效）。核心模块始终加入启用集合，历史停用记录无效。
+- 运行时：toggle 端点写库并同步内存 `_DISABLED_PLUGINS` —— **规则引擎的解析能力立即不可用**；可选插件/API 的路由卸载仍需重启（接口文案注明）。
+- 核心模块不显示开关，toggle 接口拒绝修改，也不能通过插件 ZIP 覆盖安装。
 - `plugin_enabled(name)`：零 DB 开销的活视图，供插件间软委派（books 检查 content_purify、webdav 自动备份检查自身）。
 
 ### 3.3 权限目录与 ZIP 安装
 
-- **权限目录**：各插件 `meta.permissions` 经 `all_permission_keys()` 按 `(order, name)` 聚合去重，由 `GET /api/roles/permissions/catalog` 输出扁平 `items` + 按 `ns.` 首段分组的 `grouped`，供「权限组」界面勾选；运行期由 `require_perm` 校验（超管 / `*` / 精确 / `ns.*`）。
-- **ZIP 安装**（plugins 插件）：≤50MB / 解压 ≤128MB / 成员 ≤2000、zip-slip 防护；自动推断布局（根目录或唯一顶层目录）、补空 `__init__.py`、失败自动回滚还原；成功后强制重扫插件表。**API 插件需重启挂载，引擎插件即时生效**。
+- **权限目录**：各组件 `PLUGIN.permissions` 经 `all_permission_keys()` 按 `(order, name)` 聚合去重，由 `GET /api/roles/permissions/catalog` 输出扁平 `items` + 按 `ns.` 首段分组的 `grouped`，供「权限组」界面勾选；运行期由 `require_perm` 校验（超管 / `*` / 精确 / `ns.*`）。
+- **ZIP 安装**（plugins 核心模块）：≤50MB / 解压 ≤128MB / 成员 ≤2000、zip-slip 防护；自动推断布局（根目录或唯一顶层目录）、补空 `__init__.py`、校验 `PLUGIN.kind`、失败自动回滚还原；外部包只允许声明 `engine` 或 `plugin`。**带 API 的组件需重启挂载，规则引擎即时生效**。
 
 ### 3.4 内置插件一览
 
-| 插件 | mount | order | 权限声明 |
-|---|---|---|---|
-| `engine_legado` | —（纯引擎） | 5 | — |
-| `auth` | auth | 10 | auth.basic / auth.register / auth.admin.view |
-| `users` | users | 20 | users.read/create/update/delete/reset_password |
-| `home` | home | 20 | home.read / home.stats.write |
-| `roles` | roles | 21 | roles.read / roles.manage / roles.catalog |
-| `plugins_admin` | plugins | 22 | plugins.manage（实际全部端点强制超管） |
-| `dashboard` | dashboard | 23 | dashboard.read |
-| `books` | books | 30 | books.sources.read/manage、books.search/explore/info/toc/content、books.shelf.read/write、books.progress.write、books.replace.read/manage（12 项） |
-| `content_purify` | purify | 36 | purify.read/manage/process、purify.cache.manage |
-| `webdav` | webdav | 40 | webdav.use |
+| 组件 | kind | mount | order | 权限声明 |
+|---|---|---|---|---|
+| `engine_legado` | engine | legado（附带登录 API） | 5 | legado.login |
+| `auth` | core | auth | 10 | auth.basic / auth.register / auth.admin.view |
+| `users` | core | users | 20 | users.read/create/update/delete/reset_password |
+| `home` | core | home | 20 | home.read / home.stats.write |
+| `roles` | core | roles | 21 | roles.read / roles.manage / roles.catalog |
+| `plugins_admin` | core | plugins | 22 | plugins.manage（实际全部端点强制超管） |
+| `dashboard` | core | dashboard | 23 | dashboard.read |
+| `books` | core | books | 30 | books.sources.read/manage、books.search/explore/info/toc/content、books.shelf.read/write、books.progress.write、books.replace.read/manage（12 项） |
+| `rss` | plugin | rss | 35 | rss.read/manage/favorite |
+| `content_purify` | plugin | purify | 36 | purify.read/manage/process、purify.cache.manage |
+| `webdav` | plugin | webdav | 40 | webdav.use |
+| `js_engine` | core | js | 99 | js.read |
 
 ### 3.5 各插件要点
 
@@ -242,6 +246,13 @@ def create_engine(ctx) -> LegadoEngine: ...
 | 封面代理 | `GET cover?url&token`：查询串 token 鉴权（img 无法带请求头）；sha256 落盘 `data/covers/`；UA 取归属书源、Referer 同站根；失败返回灰 SVG 占位 |
 | 替换规则 | replace 列表/legado JSON 导入/编辑/启停/删除/test 试跑 |
 
+#### rss（订阅）
+兼容 md3-legado 的 `RssSource` JSON：普通 RSS/RDF/Atom 使用默认 XML 解析，配置
+`ruleArticles` 时复用 `AnalyzeUrl` + `AnalyzeRule` 执行自定义列表/字段/正文规则；支持
+`sortUrl` 分类、`searchUrl` 搜索、`ruleNextPage` 翻页与 `singleUrl` 网页源。源和文章缓存
+全站共享，`rss_read_states` 与 `rss_favorites` 按用户隔离。正文以允许列表清洗后交给
+前端阅读抽屉渲染，抓取失败时回退已缓存文章。
+
 #### home（首页）
 `summary`：最近阅读（进度倒序取 12）+ 今日/累计时长 + 累计天数/在读本数/连续天数 + 有更新书架条目；
 `heartbeat`：阅读器每 30s 上报在读秒数（1–300），按「日 × 书」累加进 reading_stats；
@@ -259,7 +270,7 @@ restore（合并语义：书架按 book_url 补齐、进度按 updatedAt 新者�
 缓存统计/清理/指纹失效。books 的 `/content` 在本插件启用时委托同一管线（§3.6）。
 
 #### engine_legado（Legado 引擎）
-纯引擎形态（无路由）。`LegadoEngine` 是 `legado_rule.web_book` 的薄适配器，方法一一转发；
+规则引擎组件；`LegadoEngine` 是 `legado_rule.web_book` 的薄适配器，方法一一转发，组件同时附带 `/api/legado` 书源登录路由；
 `matches(raw)` 以 JSON 含 `bookSourceUrl` 认定 legado 书源。
 
 ### 3.6 引擎分发机制
@@ -302,10 +313,10 @@ history 模式，页面全部懒加载：
 |---|---|---|
 | `/login` `/register` | Login/Register | 免登录页 |
 | `/` → redirect `/shelf` | AppShell 布局 | 下述子路由 |
-| `/home` `/shelf` `/search` `/explore` `/library` | Home/Shelf/Search/Explore/LocalLibrary | 首页统计·书架·跨源搜索·发现·本地书库 |
+| `/home` `/shelf` `/rss` `/search` `/explore` `/library` | Home/Shelf/Rss/Search/Explore/LocalLibrary | 首页统计·书架·订阅·跨源搜索·发现·本地书库 |
 | `/book/:bookUrl`、`/book/ref/:refId` | BookPage | 详情页长链/短链双入口 |
 | `/replace` `/purify` `/webdav` `/me` | ReplaceRules/Purify/WebDav/Me | 替换规则·净化·备份·个人中心 |
-| `/admin` 及 `users/roles/plugins/sources` | Dashboard/Users/Roles/Plugins/Sources | 管理页 |
+| `/admin` 及 `users/roles/plugins/sources/rss-sources` | Dashboard/Users/Roles/Plugins/Sources/RssSources | 管理页 |
 | `/reader` | ReaderPage | **独立全屏沉浸式**，不套 AppShell |
 
 守卫只做**登录校验**（未登录 → `/login?next=…`）；权限不设在路由层，

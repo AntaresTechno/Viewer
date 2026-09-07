@@ -1,13 +1,18 @@
-"""Plugin registry — discovers plugins under app/plugins/*.
+"""Component registry — discovers declarations under app/plugins/*.
 
-Two plugin kinds are supported (a package may be both):
+Every package declares exactly one product-facing kind through ``PLUGIN``:
 
-1. **API 插件** exposes ``meta`` + ``create_router(ctx)`` and gets mounted at
-   ``/api/<mount>``.
+1. ``core``: bundled core module; always enabled and cannot be toggled.
+2. ``plugin``: optional feature plugin; may expose API routes.
+3. ``engine``: source-rule engine; exposes ``ENGINE`` + ``create_engine`` and
+   may additionally expose management API routes.
 
-2. **规则引擎插件** (source-engine plugin) exposes ``ENGINE`` metadata and
-   ``create_engine(ctx)`` returning an object implementing the source parsing
-   operations used by the books plugin::
+The canonical declaration is ``PLUGIN = {"kind": ..., ...}``. Legacy ``meta``
+declarations remain readable and are inferred as ``engine`` when an ENGINE
+factory exists, otherwise ``plugin``.
+
+An engine package returns an object implementing the source parsing operations
+used by the books module::
 
        ENGINE = {"key": "legado", "title": "Legado 书源", "version": "1.0.0",
                  "description": "阅读(legado)书源规则引擎"}
@@ -52,6 +57,8 @@ class PluginInfo:
     permissions: list[tuple[str, str]]
     create_router: Any | None
     module_name: str
+    kind: str
+    legacy_manifest: bool = False
     # 可选：挂在站点根路径（/api 之外）的路由工厂，如 WebDAV 服务端 /dav
     mount_root: str | None = None
     create_root_router: Any | None = None
@@ -72,20 +79,33 @@ _INSTANCE_CACHE: dict[str, Any] = {}
 _CACHE: dict[str, PluginInfo] | None = None
 _DISABLED_PLUGINS: set[str] = set()
 
+PLUGIN_KINDS = ("engine", "plugin", "core")
+PLUGIN_KIND_LABELS = {
+    "engine": "规则引擎",
+    "plugin": "插件",
+    "core": "核心模块",
+}
+
 
 def set_disabled_plugins(disabled: set[str]) -> None:
     """Live view of disabled plugins so engine lookups can respect them."""
     global _DISABLED_PLUGINS
-    _DISABLED_PLUGINS = set(disabled)
+    # Core modules are part of the application contract and cannot be disabled,
+    # including by a stale plugin_states row from an older release.
+    core_names = {
+        p.name for p in all_plugins() if p.kind == "core"
+    }
+    _DISABLED_PLUGINS = set(disabled) - core_names
 
 
 def plugin_enabled(name: str) -> bool:
-    """Whether an API plugin is currently enabled (live view, no DB hit).
+    """Whether a discovered component is currently enabled (live view, no DB hit).
 
     Plugins may call this to delegate behavior to each other without a hard
     dependency: when disabled the caller falls back to its own code path.
     """
-    return name not in _DISABLED_PLUGINS
+    info = discover_plugins().get(name)
+    return bool(info and (info.kind == "core" or name not in _DISABLED_PLUGINS))
 
 
 def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
@@ -109,30 +129,48 @@ def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
             except UnicodeEncodeError:
                 print(f"[plugins] failed to load '{mod_info.name}': {type(exc).__name__}")
             continue
-        meta = getattr(module, "meta", None)
         create_router = getattr(module, "create_router", None)
         create_root_router = getattr(module, "create_root_router", None)
         engine_meta = getattr(module, "ENGINE", None)
         create_engine = getattr(module, "create_engine", None)
-        if not isinstance(meta, dict):
+        manifest = getattr(module, "PLUGIN", None)
+        legacy_manifest = False
+        canonical_manifest = isinstance(manifest, dict)
+        if not canonical_manifest:
+            manifest = getattr(module, "meta", None)
+            legacy_manifest = isinstance(manifest, dict)
+        if not isinstance(manifest, dict):
             continue
         if create_router is None and not (isinstance(engine_meta, dict) and create_engine):
             continue
+        inferred_kind = "engine" if isinstance(engine_meta, dict) and create_engine else "plugin"
+        if canonical_manifest and not str(manifest.get("kind") or "").strip():
+            print(f"[plugins] skipped '{mod_info.name}': PLUGIN.kind is required")
+            continue
+        kind = str(manifest.get("kind") or inferred_kind).strip().lower()
+        if kind not in PLUGIN_KINDS:
+            print(f"[plugins] skipped '{mod_info.name}': invalid PLUGIN.kind={kind!r}")
+            continue
+        if kind == "engine" and not (isinstance(engine_meta, dict) and create_engine):
+            print(f"[plugins] skipped '{mod_info.name}': engine kind requires ENGINE + create_engine")
+            continue
         info = PluginInfo(
-            name=meta["name"],
-            mount=meta.get("mount") if create_router is not None else None,
-            title=meta.get("title", meta["name"]),
-            version=meta.get("version", "0.0.0"),
-            description=meta.get("description", ""),
-            order=int(meta.get("order", 100)),
-            permissions=[tuple(p) for p in meta.get("permissions", [])],
+            name=manifest["name"],
+            mount=manifest.get("mount") if create_router is not None else None,
+            title=manifest.get("title", manifest["name"]),
+            version=manifest.get("version", "0.0.0"),
+            description=manifest.get("description", ""),
+            order=int(manifest.get("order", 100)),
+            permissions=[tuple(p) for p in manifest.get("permissions", [])],
             create_router=create_router,
             module_name=module.__name__,
-            mount_root=meta.get("mount_root") if create_root_router else None,
-            create_root_router=create_root_router if meta.get("mount_root") else None,
+            kind=kind,
+            legacy_manifest=legacy_manifest,
+            mount_root=manifest.get("mount_root") if create_root_router else None,
+            create_root_router=create_root_router if manifest.get("mount_root") else None,
         )
         found[info.name] = info
-        if isinstance(engine_meta, dict) and create_engine is not None:
+        if kind == "engine" and isinstance(engine_meta, dict) and create_engine is not None:
             ekey = str(engine_meta.get("key") or info.name)
             engines[ekey] = EngineInfo(
                 key=ekey,
@@ -216,8 +254,10 @@ def enabled_plugin_names() -> set[str]:
             rows = (await session.execute(select(PluginState))).scalars().all()
             disabled = {r.name for r in rows if not r.enabled}
             enabled_extra = {r.name for r in rows if r.enabled}
-            known = set(discover_plugins().keys())
-            return (known - disabled) | (enabled_extra & known)
+            discovered = discover_plugins()
+            known = set(discovered)
+            core = {name for name, info in discovered.items() if info.kind == "core"}
+            return ((known - disabled) | (enabled_extra & known)) | core
 
     try:
         asyncio.get_running_loop()
@@ -233,6 +273,12 @@ async def toggle_plugin(name: str, enabled: bool) -> None:
 
     from ..core.db import get_session_factory
     from ..models import PluginState
+
+    info = discover_plugins().get(name)
+    if info is None:
+        raise KeyError(f"unknown plugin: {name}")
+    if info.kind == "core":
+        raise ValueError(f"core module '{name}' cannot be disabled")
 
     factory = get_session_factory()
     async with factory() as session:

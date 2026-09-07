@@ -1,6 +1,6 @@
 """WebDAV 服务端 — 让阅读(legado)客户端把本站当作进度同步服务器。
 
-专用路径挂载在 ``/dav``（meta["mount_root"]），与 ``/api`` 完全独立。
+专用路径挂载在 ``/dav``（PLUGIN["mount_root"]），与 ``/api`` 完全独立。
 兼容 legado AppWebDav 的同步方式（见仓库内 legado-with-MD3 源码）：
 
 - 认证：HTTP Basic（账号=本站登录名，密码=插件里生成的独立访问密钥）

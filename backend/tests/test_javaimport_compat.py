@@ -1,24 +1,21 @@
-"""Regression tests: Rhino JavaImporter compat + JS 引擎切换。
+"""Regression tests: Rhino JavaImporter compatibility on QuickJS.
 
 番茄类书源在 jsLib 里 `new JavaImporter()` + `with(javaImport){...}` + 用
 okhttp3/hutool，本测试确保：
 1. 初始化不再抛 `ReferenceError: JavaImporter is not defined`；
 2. okhttp3 / hutool 兼容类可经 java._http 回到 Python 真正发请求；
-3. list_engines / set_active_engine 的引擎切换逻辑可用。
+3. 状态接口只声明 QuickJS。
 """
 from __future__ import annotations
 
 import json
 
-from pathlib import Path
-
 import pytest
 
-from app.core.config import DATA_DIR
 from app.legado_rule import js_bridge as jb
 
 if jb.detect_engine() is None:
-    pytest.skip("需要 JS 引擎（quickjs/stpyv8/dukpy 任一）")
+    pytest.skip("需要 QuickJS")
 
 # 复刻番茄 jsLib 的初始化段（JavaImporter + importPackage + with 作用域）
 MINI_JSLIB = """
@@ -90,34 +87,12 @@ def test_okhttp_roundtrip_through_python_bridge(monkeypatch):
     assert headers.get("Accept-Encoding")
 
 
-def test_list_engines_shape(monkeypatch):
+def test_list_engines_is_quickjs_only():
     state = jb.list_engines()
-    assert state["requested"] in ("auto", "quickjs", "stpyv8", "dukpy")
+    assert state["requested"] == "quickjs"
     keys = {i["key"] for i in state["items"]}
-    assert {"quickjs", "stpyv8", "dukpy"} <= keys
-
-
-def test_set_active_engine_override(monkeypatch):
-    # 沙箱下 tmp_path 不可写，改写到仓库内 data 目录的临时文件并清理
-    tmp_file = DATA_DIR / "js_engine_test.json"
-    try:
-        if tmp_file.exists():
-            tmp_file.unlink()
-        monkeypatch.setattr(jb, "_override_file", lambda: tmp_file)
-        monkeypatch.setattr(jb, "_engine_name", None)
-        jb.set_active_engine("quickjs")
-        assert jb._read_override() == "quickjs"
-        assert jb._requested_engine() == "quickjs"
-        # 未知引擎被拒
-        with pytest.raises(ValueError):
-            jb.set_active_engine("nope")
-        # 恢复 auto 兜底
-        monkeypatch.setattr(jb, "_engine_name", None)
-        jb.set_active_engine("auto")
-        assert jb._requested_engine() == "auto"
-    finally:
-        if tmp_file.exists():
-            tmp_file.unlink()
+    assert keys == {"quickjs"}
+    assert state["current"] == "quickjs"
 
 
 def test_rhino_compat_asset_present():

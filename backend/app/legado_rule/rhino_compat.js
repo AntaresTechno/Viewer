@@ -5,7 +5,7 @@
  * `JavaImporter` / `importClass` / `importPackage` / `Packages` 等「导入 Java
  * 类」全局，因此大量书源（如番茄小说）在 jsLib / @js 规则里直接
  * `new JavaImporter(...)` + `with(javaImport){...}`，并调用 okhttp3 / hutool
- * 等 Android 库。quickjs / dukpy / STPyV8 都没有这些全局，
+ * 等 Android 库。QuickJS 没有这些全局，
  * 于是在「JS 绑定初始化」阶段就抛
  *   ReferenceError: JavaImporter is not defined
  *
@@ -128,7 +128,7 @@
         );
       } catch (e) { raw = null; }
       // httpRequest 桥返回 JSON 字符串（自带 code/body），避免各引擎对 dict
-      // 返回值支持差异（dukpy 不把 dict 直接啥给 JS）。
+      // 通过 JSON 字符串跨越 QuickJS/Python 边界，避免对象转换差异。
       var res = raw;
       if (typeof raw === "string") {
         try { res = JSON.parse(raw); } catch (e) { res = { body: raw, code: 0 }; }
