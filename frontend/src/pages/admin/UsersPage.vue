@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import {
   MiuixButton,
   MiuixCard,
@@ -10,11 +10,15 @@ import {
 } from "miuix-vue";
 import { api, errMsg } from "@/api/client";
 import type { RoleItem, UserPublic } from "@/api/client";
+import { showAlert, showConfirm } from "@/services/appDialog";
+import BatchActionBar from "@/components/admin/BatchActionBar.vue";
 
 const users = ref<UserPublic[]>([]);
 const roles = ref<RoleItem[]>([]);
 const loading = ref(true);
 const error = ref("");
+const selectedIds = ref<number[]>([]);
+const batchBusy = ref(false);
 
 /* create dialog */
 const showCreate = ref(false);
@@ -36,6 +40,8 @@ async function load() {
     const [u, r] = await Promise.all([api.usersList(), api.rolesList()]);
     users.value = u.items;
     roles.value = r.items;
+    const known = new Set(users.value.map((user) => user.id));
+    selectedIds.value = selectedIds.value.filter((id) => known.has(id));
   } catch (e) {
     error.value = errMsg(e);
   } finally {
@@ -77,7 +83,7 @@ async function toggleActive(u: UserPublic) {
     await api.userUpdate(u.id, { is_active: !u.is_active });
     u.is_active = !u.is_active;
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 
@@ -86,7 +92,7 @@ async function toggleSuper(u: UserPublic) {
     await api.userUpdate(u.id, { is_superuser: !u.is_superuser });
     u.is_superuser = !u.is_superuser;
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 
@@ -107,12 +113,15 @@ async function doReset() {
 }
 
 async function removeUser(u: UserPublic) {
-  if (!confirm(`确定删除用户 ${u.username}？`)) return;
+  if (!await showConfirm(
+    `确定删除用户 ${u.username}？`,
+    { title: "删除用户", confirmText: "删除", danger: true },
+  )) return;
   try {
     await api.userDelete(u.id);
     await load();
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 
@@ -122,7 +131,7 @@ function toggleRole(u: UserPublic, rid: number) {
   api
     .userUpdate(u.id, { role_ids: next })
     .then(() => (u.role_ids = next))
-    .catch((e) => alert(errMsg(e)));
+    .catch((e) => void showAlert(errMsg(e)));
 }
 
 async function toggleRoleAdd(u: UserPublic, rid: number) {
@@ -130,7 +139,60 @@ async function toggleRoleAdd(u: UserPublic, rid: number) {
     await api.userUpdate(u.id, { role_ids: [...u.role_ids, rid] });
     u.role_ids = [...u.role_ids, rid];
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
+  }
+}
+
+const visibleIds = computed(() => users.value.map((user) => user.id));
+const allVisibleSelected = computed(() =>
+  visibleIds.value.length > 0
+  && visibleIds.value.every((id) => selectedIds.value.includes(id)),
+);
+
+function toggleSelected(id: number) {
+  selectedIds.value = selectedIds.value.includes(id)
+    ? selectedIds.value.filter((value) => value !== id)
+    : [...selectedIds.value, id];
+}
+
+function toggleAllVisible() {
+  selectedIds.value = allVisibleSelected.value ? [] : [...visibleIds.value];
+}
+
+async function batchSetActive(active: boolean) {
+  const ids = [...selectedIds.value];
+  if (!ids.length || batchBusy.value) return;
+  batchBusy.value = true;
+  try {
+    await api.usersSetActive(ids, active);
+    const selected = new Set(ids);
+    users.value.forEach((user) => {
+      if (selected.has(user.id)) user.is_active = active;
+    });
+    selectedIds.value = [];
+  } catch (e) {
+    await showAlert(errMsg(e));
+  } finally {
+    batchBusy.value = false;
+  }
+}
+
+async function batchDelete() {
+  const ids = [...selectedIds.value];
+  if (!ids.length || batchBusy.value) return;
+  if (!await showConfirm(
+    `删除选中的 ${ids.length} 个用户？该操作不能撤销。`,
+    { title: "批量删除用户", confirmText: "删除", danger: true },
+  )) return;
+  batchBusy.value = true;
+  try {
+    await api.usersDelete(ids);
+    selectedIds.value = [];
+    await load();
+  } catch (e) {
+    await showAlert(errMsg(e));
+  } finally {
+    batchBusy.value = false;
   }
 }
 </script>
@@ -143,16 +205,30 @@ async function toggleRoleAdd(u: UserPublic, rid: number) {
     </div>
     <div v-if="error">{{ error }}</div>
 
+    <BatchActionBar
+      :selected-count="selectedIds.length"
+      :total-count="visibleIds.length"
+      :all-selected="allVisibleSelected"
+      :busy="batchBusy"
+      @toggle-all="toggleAllVisible"
+      @clear="selectedIds = []"
+      @enable="batchSetActive(true)"
+      @disable="batchSetActive(false)"
+      @delete="batchDelete"
+    />
+
     <MiuixCard :show-indication="false" class="tbl-card">
       <table class="md-table">
         <thead>
           <tr>
+            <th class="select-cell"><MiuixCheckbox :model-value="allVisibleSelected" aria-label="全选当前用户" @update:model-value="toggleAllVisible" /></th>
             <th>ID</th><th>用户名</th><th>昵称</th><th>状态</th>
             <th>超级</th><th>权限组</th><th>最近登录</th><th></th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="u in users" :key="u.id">
+            <td class="select-cell"><MiuixCheckbox :model-value="selectedIds.includes(u.id)" :aria-label="`选择用户 ${u.username}`" @update:model-value="toggleSelected(u.id)" /></td>
             <td>{{ u.id }}</td>
             <td>{{ u.username }}</td>
             <td>{{ u.display_name }}</td>
@@ -259,6 +335,10 @@ async function toggleRoleAdd(u: UserPublic, rid: number) {
 <style scoped>
 .tbl-card {
   --app-card-pad: 4px 10px;
+}
+.select-cell {
+  width: 38px;
+  text-align: center;
 }
 .role-chip {
   display: inline-block;

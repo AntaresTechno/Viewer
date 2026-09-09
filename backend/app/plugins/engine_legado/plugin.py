@@ -128,8 +128,8 @@ def create_engine(ctx: "PluginContext") -> LegadoEngine:
 def create_router(ctx: "PluginContext") -> APIRouter:
     """书源登录端点（/api/legado/login/*）。
 
-    注意：按 docs/plugin-spec.md §7，带 API 的组件不开 future-annotations，
-    请求体模型定义在本函数内部。
+    请求体模型定义在本函数内部，因此本模块不启用 future-annotations。
+    插件的一般开发约定见 docs/plugins.md。
     """
     import asyncio
     import json

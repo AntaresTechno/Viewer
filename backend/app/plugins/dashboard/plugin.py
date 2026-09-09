@@ -25,7 +25,15 @@ PLUGIN = {
 def create_router(ctx: "PluginContext") -> APIRouter:
     from ...core.deps import require_perm
     from ...core.db import get_db
-    from ...models import BookSourceRow, PluginState, Role, ShelfItem, User
+    from ...models import (
+        BookSourceRow,
+        MediaSourceRow,
+        PluginState,
+        Role,
+        RssSourceRow,
+        ShelfItem,
+        User,
+    )
     from ...plugins.registry import all_plugins
 
     router = APIRouter(tags=["dashboard"])
@@ -37,8 +45,13 @@ def create_router(ctx: "PluginContext") -> APIRouter:
     ):
         users_total = await db.scalar(select(func.count()).select_from(User))
         sources_total = await db.scalar(select(func.count()).select_from(BookSourceRow))
+        rss_sources_total = await db.scalar(
+            select(func.count()).select_from(RssSourceRow)
+        )
         shelf_total = await db.scalar(select(func.count()).select_from(ShelfItem))
         roles_total = await db.scalar(select(func.count()).select_from(Role))
+        media_sources_total = await db.scalar(
+            select(func.count()).select_from(MediaSourceRow))
         recent_users = (
             await db.execute(select(User).order_by(User.created_at.desc()).limit(5))
         ).scalars().all()
@@ -50,8 +63,10 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         return {
             "users_total": users_total or 0,
             "sources_total": sources_total or 0,
+            "rss_sources_total": rss_sources_total or 0,
             "shelf_total": shelf_total or 0,
             "roles_total": roles_total or 0,
+            "media_sources_total": media_sources_total or 0,
             "plugins_enabled": sum(
                 1 for p in components
                 if p.kind == "plugin" and states.get(p.name, True)

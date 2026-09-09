@@ -10,11 +10,15 @@ import {
 } from "miuix-vue";
 import { api, errMsg } from "@/api/client";
 import type { PermissionCatalog, RoleItem } from "@/api/client";
+import { showAlert, showConfirm } from "@/services/appDialog";
+import BatchActionBar from "@/components/admin/BatchActionBar.vue";
 
 const roles = ref<RoleItem[]>([]);
 const catalog = ref<PermissionCatalog | null>(null);
 const loading = ref(true);
 const error = ref("");
+const selectedIds = ref<number[]>([]);
+const batchBusy = ref(false);
 
 /* editor state */
 const showEditor = ref(false);
@@ -31,6 +35,8 @@ async function load() {
     const [r, c] = await Promise.all([api.rolesList(), api.permCatalog()]);
     roles.value = r.items;
     catalog.value = c;
+    const known = new Set(roles.value.map((role) => role.id));
+    selectedIds.value = selectedIds.value.filter((id) => known.has(id));
   } catch (e) {
     error.value = errMsg(e);
   } finally {
@@ -112,12 +118,52 @@ async function save() {
 }
 
 async function remove(r: RoleItem) {
-  if (!confirm(`删除权限组 ${r.name}？`)) return;
+  if (!await showConfirm(
+    `删除权限组 ${r.name}？`,
+    { title: "删除权限组", confirmText: "删除", danger: true },
+  )) return;
   try {
     await api.roleDelete(r.id);
     await load();
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
+  }
+}
+
+const manageableIds = computed(() =>
+  roles.value.filter((role) => !role.is_system).map((role) => role.id),
+);
+const allManageableSelected = computed(() =>
+  manageableIds.value.length > 0
+  && manageableIds.value.every((id) => selectedIds.value.includes(id)),
+);
+
+function toggleSelected(id: number) {
+  selectedIds.value = selectedIds.value.includes(id)
+    ? selectedIds.value.filter((value) => value !== id)
+    : [...selectedIds.value, id];
+}
+
+function toggleAllManageable() {
+  selectedIds.value = allManageableSelected.value ? [] : [...manageableIds.value];
+}
+
+async function batchDelete() {
+  const ids = [...selectedIds.value];
+  if (!ids.length || batchBusy.value) return;
+  if (!await showConfirm(
+    `删除选中的 ${ids.length} 个权限组？关联用户将解除这些权限组。`,
+    { title: "批量删除权限组", confirmText: "删除", danger: true },
+  )) return;
+  batchBusy.value = true;
+  try {
+    await api.rolesDelete(ids);
+    selectedIds.value = [];
+    await load();
+  } catch (e) {
+    await showAlert(errMsg(e));
+  } finally {
+    batchBusy.value = false;
   }
 }
 </script>
@@ -129,9 +175,27 @@ async function remove(r: RoleItem) {
       <MiuixButton type="primary" @click="openCreate">新建权限组</MiuixButton>
     </div>
 
+    <BatchActionBar
+      :selected-count="selectedIds.length"
+      :total-count="manageableIds.length"
+      :all-selected="allManageableSelected"
+      :busy="batchBusy"
+      :show-enable="false"
+      :show-disable="false"
+      @toggle-all="toggleAllManageable"
+      @clear="selectedIds = []"
+      @delete="batchDelete"
+    />
+
     <div class="role-grid">
       <MiuixCard v-for="r in roles" :key="r.id" class="role-card" :show-indication="false">
         <div class="role-head">
+          <MiuixCheckbox
+            :model-value="selectedIds.includes(r.id)"
+            :disabled="r.is_system"
+            :aria-label="`选择权限组 ${r.name}`"
+            @update:model-value="toggleSelected(r.id)"
+          />
           <MiuixText type="title3">{{ r.name }}</MiuixText>
           <span v-if="r.is_system" class="sys-tag">系统</span>
         </div>

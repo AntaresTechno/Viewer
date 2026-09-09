@@ -41,7 +41,51 @@ export interface PluginItem {
   kindLabel: "规则引擎" | "插件" | "核心模块";
   canToggle: boolean;
   legacyManifest: boolean;
+  requires: string[];
+  missingDependencies: string[];
   enabled: boolean;
+  ui: { title: string } | null;
+}
+
+export interface PluginUiPayload {
+  name: string;
+  title: string;
+  apiBase: string | null;
+  html: string;
+}
+
+export interface ProtocolAction {
+  handler: string;
+  scheme: string;
+  action: string;
+  title: string;
+  description: string;
+  payload: Record<string, string>;
+  executePath: string;
+  requiresConfirmation: boolean;
+  bridgePath: string;
+}
+
+export interface ProtocolImportResult {
+  added: number;
+  updated: number;
+  skipped: number;
+  source?: string;
+  format?: string;
+  engine?: string;
+  classified?: {
+    books: number;
+    subscriptions: number;
+    comic: number;
+    audio: number;
+    video: number;
+  };
+  categories?: Record<string, {
+    added: number;
+    updated: number;
+    skipped: number;
+  }>;
+  warnings?: string[];
 }
 
 export interface JsEngineItem {
@@ -60,6 +104,8 @@ export interface JsEngines {
 export interface DashboardSummary {
   users_total: number;
   sources_total: number;
+  rss_sources_total: number;
+  media_sources_total: number;
   shelf_total: number;
   roles_total: number;
   plugins_enabled: number;
@@ -487,6 +533,131 @@ export function errMsg(e: unknown): string {
   return "网络错误";
 }
 
+/* ----------------------------------------------------- media (媒体库插件) */
+export type MediaKind = "comic" | "audio" | "video";
+
+export interface MediaSource {
+  id: number;
+  sourceName: string;
+  sourceKey: string;
+  sourceFormat: "rss" | "book";
+  mediaKind: MediaKind | null;
+  sourceGroup: string;
+  sourceComment: string;
+  enabled: boolean;
+  customOrder: number;
+  hasIcon: boolean;
+  detectedType?: number | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface MediaImportResult {
+  added: number;
+  updated: number;
+  skipped: number;
+  warnings: string[];
+  needsKind: boolean;
+  undecided: { sourceFormat: string; sourceKey: string; sourceName: string }[];
+}
+
+export interface MediaCatalogItem {
+  itemKey: string;
+  itemUrl: string;
+  title: string;
+  creator: string;
+  coverUrl: string;
+  intro: string;
+  latestUnit: string;
+  totalUnits: number;
+  tags: string[];
+  sourceId: number;
+  sourceName: string;
+  mediaKind: MediaKind;
+}
+
+export interface MediaCatalogPageRes {
+  items: MediaCatalogItem[];
+  nextUrl: string | null;
+  warning: string;
+}
+
+export interface MediaSort {
+  name: string;
+  url: string;
+}
+
+export interface MediaProgressDto {
+  unitKey: string;
+  unitIndex: number;
+  unitTitle: string;
+  positionMs: number;
+  durationMs: number;
+  pageIndex: number;
+  pageCount: number;
+  completed: boolean;
+  legacyState: Record<string, unknown>;
+  updatedAt: string | null;
+}
+
+export interface MediaLibraryItem {
+  id: number;
+  sourceId: number;
+  sourceName: string;
+  mediaKind: MediaKind;
+  itemKey: string;
+  itemUrl: string;
+  title: string;
+  creator: string;
+  coverUrl: string;
+  intro: string;
+  tags: string[];
+  latestUnit: string;
+  totalUnits: number;
+  hasUpdate: boolean;
+  contentUpdatedAt?: string | null;
+  createdAt?: string | null;
+  lastViewedAt?: string | null;
+  progress: MediaProgressDto | null;
+}
+
+export interface MediaOverview {
+  counts: { comic: number; audio: number; video: number; total: number };
+  recent: MediaLibraryItem[];
+  updates: MediaLibraryItem[];
+  recentlyAdded: MediaLibraryItem[];
+}
+
+export interface MediaUnit {
+  unitKey: string;
+  index: number;
+  title: string;
+  durationMs: number;
+  locked: boolean;
+}
+
+export interface MediaResolveNative {
+  mode: "native";
+  kind: MediaKind;
+  streams: { url: string; quality: string; mime: string; headers?: Record<string, string> }[];
+  subtitles: { url: string; lang: string }[];
+  posterUrl: string;
+  lyrics: string;
+  warning: string;
+  images?: { url: string; headers?: Record<string, string> }[];
+  readingDirection?: string;
+  nextUnitKey?: string;
+}
+
+export type MediaResolveResult = MediaResolveNative | { mode: "legacy"; kind: MediaKind };
+
+export interface MediaLegacyDoc {
+  html: string;
+  iframeKey: string;
+  warning: string;
+  restore: Record<string, unknown>;
+}
+
 /* ------------------------------------------------------------------ auth */
 export const api = {
   /** 后端连通性自检（公开、无鉴权、轻量）：读不到即视为离线。 */
@@ -536,6 +707,12 @@ export const api = {
   userDelete: async (id: number) => {
     await http.delete(`/users/${id}`);
   },
+  usersSetActive: async (ids: number[], active: boolean) =>
+    (await http.post<{ updated: number; active: boolean }>(
+      "/users/batch-active", { ids, active },
+    )).data,
+  usersDelete: async (ids: number[]) =>
+    (await http.post<{ deleted: number }>("/users/batch-delete", { ids })).data,
   userResetPassword: async (id: number, new_password: string) => {
     await http.post(`/users/${id}/reset-password`, { new_password });
   },
@@ -553,6 +730,8 @@ export const api = {
   roleDelete: async (id: number) => {
     await http.delete(`/roles/${id}`);
   },
+  rolesDelete: async (ids: number[]) =>
+    (await http.post<{ deleted: number }>("/roles/batch-delete", { ids })).data,
   permCatalog: async () =>
     (await http.get<PermissionCatalog>("/roles/permissions/catalog")).data,
 
@@ -573,7 +752,41 @@ export const api = {
     );
     return r.data;
   },
+  pluginUi: async (name: string) =>
+    (await http.get<PluginUiPayload>(`/plugins/${encodeURIComponent(name)}/ui`)).data,
+  pluginUiRequest: async (
+    apiBase: string | null,
+    method: string,
+    path: string,
+    body?: unknown,
+  ) => {
+    const verb = method.toUpperCase();
+    if (!apiBase || !/^\/[a-z0-9-]+$/i.test(apiBase)) {
+      throw new Error("该插件没有可调用的 API");
+    }
+    if (!/^\/(?!\/)[a-z0-9_./?=&%:+-]*$/i.test(path) || path.includes("..")) {
+      throw new Error("插件请求路径无效");
+    }
+    if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(verb)) {
+      throw new Error("插件请求方法无效");
+    }
+    return (await http.request({
+      url: apiBase + path,
+      method: verb,
+      data: body,
+    })).data;
+  },
 
+  /* ----------------------------------------------- custom protocol bridge */
+  protocolResolve: async (uri: string) =>
+    (await http.post<ProtocolAction>("/protocol-bridge/resolve", { uri })).data,
+  protocolExecute: async (action: ProtocolAction) => {
+    if (!action.executePath.startsWith("/api/")) {
+      throw new Error("协议插件返回了无效执行地址");
+    }
+    const path = action.executePath.slice(4);
+    return (await http.post<ProtocolImportResult>(path, action.payload)).data;
+  },
   /* ------------------------------------------------- legado 书源登录 */
   legadoLoginForm: async (sourceUrl: string) => {
     const r = await http.get<LoginForm>(
@@ -632,6 +845,11 @@ export const api = {
   rssToggle: async (id: number) => {
     return (await http.post<{ enabled: boolean }>(`/rss/sources/${id}/toggle`)).data;
   },
+  rssSetEnabled: async (ids: number[], enabled: boolean) => {
+    return (await http.post<{ updated: number; enabled: boolean }>(
+      "/rss/sources/batch-enabled", { ids, enabled },
+    )).data;
+  },
   rssSorts: async (sourceUrl: string) => {
     return (await http.get<{ items: RssSort[] }>("/rss/sorts", {
       params: { source_url: sourceUrl },
@@ -689,6 +907,10 @@ export const api = {
   sourceToggle: async (id: number) => {
     const r = await http.post(`/books/sources/${id}/toggle`, {});
     return r.data as { enabled: boolean };
+  },
+  sourcesSetEnabled: async (ids: number[], enabled: boolean) => {
+    const r = await http.post("/books/sources/batch-enabled", { ids, enabled });
+    return r.data as { updated: number; enabled: boolean };
   },
   searchBooks: async (
     key: string,
@@ -1216,8 +1438,150 @@ export const api = {
   },
 
   /* ------------------------------------------------------------ JS 引擎 */
+  // eslint-disable-next-line no-console
   jsEngines: async () => {
     const r = await http.get<JsEngines>("/js/engines");
+    return r.data;
+  },
+
+  /* ------------------------------------------------------------ media */
+  mediaSources: async (kind?: string) => {
+    const r = await http.get<{ items: MediaSource[] }>("/media/sources", {
+      params: kind ? { kind } : {},
+    });
+    return r.data.items;
+  },
+  mediaImportSources: async (body: {
+    data: string;
+    mediaKind?: string;
+    url?: string;
+  }) => {
+    const r = await http.post<MediaImportResult>("/media/sources/import", body);
+    return r.data;
+  },
+  mediaDeleteSources: async (ids: number[]) => {
+    const r = await http.post<{ deleted: number }>("/media/sources/delete", { ids });
+    return r.data;
+  },
+  mediaToggleSource: async (id: number) => {
+    const r = await http.post<{ enabled: boolean }>(`/media/sources/${id}/toggle`);
+    return r.data;
+  },
+  mediaSetSourcesEnabled: async (ids: number[], enabled: boolean) => {
+    const r = await http.post<{ updated: number; enabled: boolean }>(
+      "/media/sources/batch-enabled", { ids, enabled },
+    );
+    return r.data;
+  },
+  mediaSetSourceKind: async (id: number, mediaKind: string) => {
+    const r = await http.post<{ id: number; mediaKind: string }>(
+      `/media/sources/${id}/kind`,
+      { mediaKind },
+    );
+    return r.data;
+  },
+  mediaExportSources: async (ids?: number[]) => {
+    const params = new URLSearchParams();
+    (ids || []).forEach((id) => params.append("ids", String(id)));
+    const qs = params.toString();
+    const r = await http.get<object[]>(`/media/sources/export?${qs}`);
+    return r.data as Record<string, unknown>[];
+  },
+  mediaCatalogSorts: async (sourceId: number) => {
+    const r = await http.get<{ items: MediaSort[] }>("/media/catalog/sorts", {
+      params: { sourceId },
+    });
+    return r.data.items;
+  },
+  mediaCatalogPage: async (sourceId: number, sort: MediaSort, page: number) => {
+    const r = await http.get<MediaCatalogPageRes>("/media/catalog", {
+      params: { sourceId, sortName: sort.name, sortUrl: sort.url, page },
+    });
+    return r.data;
+  },
+  mediaCatalogSearch: async (sourceId: number, keyword: string, page: number) => {
+    const r = await http.get<MediaCatalogPageRes>("/media/catalog/search", {
+      params: { sourceId, keyword, page },
+    });
+    return r.data;
+  },
+  mediaCatalogDetail: async (sourceId: number, itemKey: string, itemUrl: string) => {
+    const r = await http.get<MediaCatalogItem>("/media/catalog/detail", {
+      params: { sourceId, itemKey, itemUrl },
+    });
+    return r.data;
+  },
+  mediaOverview: async () => {
+    const r = await http.get<MediaOverview>("/media/overview");
+    return r.data;
+  },
+  mediaLibrary: async (opts?: {
+    kind?: MediaKind | "";
+    sort?: string;
+    order?: string;
+  }) => {
+    const r = await http.get<{ items: MediaLibraryItem[] }>("/media/library", {
+      params: {
+        kind: opts?.kind || "",
+        sort: opts?.sort || "added",
+        order: opts?.order || "desc",
+      },
+    });
+    return r.data.items;
+  },
+  mediaLibraryAdd: async (body: {
+    sourceId: number;
+    item: Record<string, unknown>;
+    mediaKind?: string;
+  }) => {
+    const r = await http.post<{ id: number; existed: boolean }>("/media/library", body);
+    return r.data;
+  },
+  mediaLibraryGet: async (id: number) => {
+    const r = await http.get<MediaLibraryItem>(`/media/library/${id}`);
+    return r.data;
+  },
+  mediaLibraryDelete: async (id: number) => {
+    const r = await http.delete<{ deleted: number }>(`/media/library/${id}`);
+    return r.data;
+  },
+  mediaLibraryRefresh: async (id: number) => {
+    const r = await http.post<{ changed: boolean; units: number }>(
+      `/media/library/${id}/refresh`,
+    );
+    return r.data;
+  },
+  mediaLibraryUnits: async (id: number) => {
+    const r = await http.get<{ items: MediaUnit[] }>(`/media/library/${id}/units`);
+    return r.data.items;
+  },
+  mediaResolve: async (id: number, unitKey: string) => {
+    const r = await http.post<MediaResolveResult>(
+      `/media/library/${id}/units/${encodeURIComponent(unitKey)}/resolve`,
+    );
+    return r.data;
+  },
+  mediaProgressGet: async (id: number) => {
+    const r = await http.get<{ progress: MediaProgressDto | null }>(
+      `/media/library/${id}/progress`,
+    );
+    return r.data.progress;
+  },
+  mediaProgressPut: async (id: number, body: Partial<MediaProgressDto>) => {
+    const r = await http.put<{ progress: MediaProgressDto }>(
+      `/media/library/${id}/progress`,
+      body,
+    );
+    return r.data.progress;
+  },
+  mediaLegacyDoc: async (
+    id: number,
+    opts?: { itemKey?: string; itemUrl?: string },
+  ) => {
+    const r = await http.post<MediaLegacyDoc>(
+      `/media/library/${id}/legacy-document`,
+      opts || {},
+    );
     return r.data;
   },
 };

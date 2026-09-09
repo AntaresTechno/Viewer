@@ -105,6 +105,14 @@
       headers: function () {
         return headers;
       },
+      header: function (name) {
+        var wanted = String(name == null ? "" : name).toLowerCase();
+        var keys = Object.keys(headers);
+        for (var i = 0; i < keys.length; i++) {
+          if (String(keys[i]).toLowerCase() === wanted) return headers[keys[i]];
+        }
+        return null;
+      },
       raw: function () {
         return rawResp;
       },
@@ -195,6 +203,34 @@
   }
 
   if (typeof java !== "undefined" && java) {
+    // Python QuickJS callbacks can only return scalar values.  getElement(s)
+    // therefore crosses the boundary as JSON and is restored to the normal
+    // array / element-string result visible to book-source JavaScript.
+    var _getElements = java.getElements;
+    java.getElements = function (rule) {
+      if (!_getElements) return [];
+      try { return toArray(_getElements.apply(java, arguments)); }
+      catch (e) { return []; }
+    };
+    var _getElement = java.getElement;
+    java.getElement = function (rule) {
+      if (!_getElement) return null;
+      try {
+        var rawElement = _getElement.apply(java, arguments);
+        if (typeof rawElement === "string") {
+          try { return JSON.parse(rawElement); } catch (e) { return rawElement; }
+        }
+        return rawElement;
+      } catch (e) { return null; }
+    };
+
+    var _get = java.get;
+    java.get = function (target) {
+      if (!_get) return mkResponse({});
+      var raw = _get.apply(java, arguments);
+      return /^https?:\/\//i.test(String(target || "")) ? mkResponse(raw) : raw;
+    };
+
     var _ajaxAll = java.ajaxAll;
     java.ajaxAll = function (urls) {
       if (!_ajaxAll) return [];
@@ -220,6 +256,33 @@
       }
       return mkResponse(raw);
     };
+
+    var _head = java.head;
+    java.head = function (urlStr) {
+      if (!_head) return mkResponse({});
+      var raw;
+      try {
+        raw = _head.apply(java, arguments);
+      } catch (e) {
+        return mkResponse({});
+      }
+      return mkResponse(raw);
+    };
+
+    // Android's createSymmetricCrypto returns a Crypto object.  Keep the
+    // object-shaped API while delegating the actual AES operation to Python;
+    // encrypted source rules use either this form or the legacy direct helper.
+    if (!java.createSymmetricCrypto && java.aesBase64DecodeToString) {
+      java.createSymmetricCrypto = function (transformation, key, iv) {
+        return {
+          decryptStr: function (data) {
+            return java.aesBase64DecodeToString(
+              data, key, transformation || "AES/ECB/PKCS7Padding", iv || ""
+            );
+          },
+        };
+      };
+    }
   }
 
   // infoMap（发现页输入）桥 → MutableMap 形态。

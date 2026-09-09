@@ -8,6 +8,7 @@ import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
 import LoadingImage from "@/components/LoadingImage.vue";
 import { collectGroups, splitGroups } from "@/utils/sourceGroups";
 import { openDetail } from "@/utils/reader";
+import { showAlert } from "@/services/appDialog";
 
 const router = useRouter();
 const route = useRoute();
@@ -31,7 +32,7 @@ onMounted(async () => {
     sources.value = r.items.filter((s) => s.enabled);
     selected.value = []; // empty = all
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
   // 书源列表就绪后再发起（doSearch 依赖它算范围；空列表=搜全部，也能搜）
   if (key.value.trim()) await doSearch();
@@ -112,7 +113,7 @@ async function doSearch() {
     });
     errors.value = r.errors;
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   } finally {
     searching.value = false;
   }

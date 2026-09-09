@@ -17,7 +17,7 @@ PLUGIN = {
     "name": "plugins",
     "mount": "plugins",
     "title": "插件管理",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "按规则引擎、插件、核心模块查看组件；管理可选组件并安装 ZIP",
     "order": 22,
     "permissions": [("plugins.manage", "管理规则引擎与插件")],
@@ -110,13 +110,9 @@ def _plan_install(
 
 
 def create_router(ctx: "PluginContext") -> APIRouter:
-    from sqlalchemy import select
-
     from ...core.deps import require_superuser
-    from ...core.db import get_db
-    from ...models import PluginState
     from ...plugins import registry as registry_mod
-    from ...plugins.registry import all_plugins, toggle_plugin
+    from ...plugins.registry import all_plugins, load_plugin_ui, toggle_plugin
 
     router = APIRouter(tags=["plugins"])
 
@@ -125,10 +121,8 @@ def create_router(ctx: "PluginContext") -> APIRouter:
 
     @router.get("")
     async def list_plugins(
-        current=Depends(require_superuser), db=Depends(get_db)
+        current=Depends(require_superuser),
     ):
-        rows = (await db.execute(select(PluginState))).scalars().all()
-        states = {r.name: r.enabled for r in rows}
         return {
             "items": [
                 {
@@ -139,12 +133,41 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                     "mount": p.mount,
                     "kind": p.kind,
                     "kindLabel": registry_mod.PLUGIN_KIND_LABELS[p.kind],
+                    "requires": list(p.requires),
+                    "missingDependencies": [
+                        name for name in p.requires
+                        if not registry_mod.plugin_enabled(name)
+                    ],
                     "canToggle": p.kind != "core",
                     "legacyManifest": p.legacy_manifest,
-                    "enabled": True if p.kind == "core" else states.get(p.name, True),
+                    "enabled": registry_mod.plugin_enabled(p.name),
+                    "ui": {"title": p.ui.title} if p.ui is not None else None,
                 }
                 for p in all_plugins()
             ]
+        }
+
+    @router.get("/{name}/ui")
+    async def plugin_ui(
+        name: str,
+        current=Depends(require_superuser),
+    ):
+        info = next((p for p in all_plugins() if p.name == name), None)
+        if info is None:
+            raise HTTPException(404, "组件不存在")
+        if info.ui is None:
+            raise HTTPException(404, "该组件没有管理界面")
+        if not registry_mod.plugin_enabled(name):
+            raise HTTPException(409, "组件未启用，无法打开管理界面")
+        try:
+            html = load_plugin_ui(info)
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise HTTPException(500, "插件界面文件不可用") from exc
+        return {
+            "name": info.name,
+            "title": info.ui.title,
+            "apiBase": f"/{info.mount}" if info.mount else None,
+            "html": html,
         }
 
     @router.post("/{name}/toggle")
@@ -156,7 +179,10 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         info = next(p for p in all_plugins() if p.name == name)
         if info.kind == "core":
             raise HTTPException(400, "核心模块固定启用，不能停用")
-        await toggle_plugin(name, body.enabled)
+        try:
+            await toggle_plugin(name, body.enabled)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         # keep the live disabled-set in sync so engine lookups respect it
         from ...plugins.registry import _DISABLED_PLUGINS, set_disabled_plugins
 
@@ -287,6 +313,12 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                     raise ValueError(
                         "规则引擎声明需要同时提供 ENGINE 与 create_engine"
                     )
+                ui_info = registry_mod.parse_plugin_ui(manifest_obj, module)
+                if not callable(getattr(module, "create_router", None)) and not (
+                    declared_kind == "engine"
+                    and callable(getattr(module, "create_engine", None))
+                ) and ui_info is None:
+                    raise ValueError("插件需要 API、规则引擎或 PLUGIN.ui 中的至少一种能力")
             except HTTPException:
                 purge_modules(dirname)
                 if dest.exists():
@@ -314,13 +346,19 @@ def create_router(ctx: "PluginContext") -> APIRouter:
 
         info = next((p for p in all_plugins() if p.name == manifest_obj["name"]), None)
         has_router = bool(info and info.create_router)
+        has_ui = bool(info and info.ui)
         if info and info.kind == "engine":
             note = (
                 "规则引擎已生效；附带的 API 路由将在重启后端后挂载。"
                 if has_router else "规则引擎已即时生效。"
             )
         else:
-            note = "插件安装成功；API 路由将在重启后端后挂载生效。"
+            if has_router:
+                note = "插件安装成功；API 路由将在重启后端后挂载生效。"
+            elif has_ui:
+                note = "插件界面已安装，可从插件管理中打开。"
+            else:
+                note = "插件安装成功。"
         return {
             "ok": True,
             "name": manifest_obj["name"],

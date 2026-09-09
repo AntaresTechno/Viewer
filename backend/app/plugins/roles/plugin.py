@@ -39,6 +39,9 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         description: str = ""
         permissions: list[str] = []
 
+    class IdsBody(BaseModel):
+        ids: list[int]
+
     def _pub(r: Role) -> dict:
         return {
             "id": r.id,
@@ -132,5 +135,26 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         await db.delete(r)
         await db.commit()
         return {"ok": True}
+
+    @router.post("/batch-delete")
+    async def delete_roles(
+        body: IdsBody,
+        current=Depends(require_perm("roles.manage")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        ids = set(body.ids)
+        rows = (
+            await db.execute(select(Role).where(Role.id.in_(ids)))
+        ).scalars().all()
+        if any(role.is_system for role in rows):
+            raise HTTPException(400, "系统内置权限组不可批量删除")
+        users = (await db.execute(select(User))).scalars().all()
+        for user in users:
+            if ids.intersection(user.role_ids or []):
+                user.role_ids = [rid for rid in (user.role_ids or []) if rid not in ids]
+        for role in rows:
+            await db.delete(role)
+        await db.commit()
+        return {"deleted": len(rows)}
 
     return router

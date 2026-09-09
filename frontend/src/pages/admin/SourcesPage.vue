@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import {
   MiuixButton,
   MiuixCard,
+  MiuixCheckbox,
   MiuixDialog,
   MiuixInput,
   MiuixSwitch,
@@ -11,6 +12,23 @@ import { api, errMsg } from "@/api/client";
 import type { EngineInfo, SourceRow } from "@/api/client";
 import { collectGroups, splitGroups } from "@/utils/sourceGroups";
 import SourceLoginDialog from "@/components/SourceLoginDialog.vue";
+import FileDropOverlay from "@/components/admin/FileDropOverlay.vue";
+import BatchActionBar from "@/components/admin/BatchActionBar.vue";
+import { useAuth } from "@/stores/auth";
+import { showAlert, showConfirm } from "@/services/appDialog";
+
+const auth = useAuth();
+const dropping = ref(false);
+const selectedIds = ref<number[]>([]);
+const batchBusy = ref(false);
+
+/** 全窗口拖入 .json → 回填导入面板。 */
+function onDropPicked(text: string, name: string) {
+  importJson.value = text;
+  importFileName.value = name;
+  importErr.value = "";
+  showImport.value = true;
+}
 
 const items = ref<SourceRow[]>([]);
 const engines = ref<EngineInfo[]>([]);
@@ -82,6 +100,8 @@ async function load() {
     const [s, e] = await Promise.all([api.sourcesList(), api.enginesList()]);
     items.value = s.items;
     engines.value = e.items;
+    const known = new Set(items.value.map((source) => source.id));
+    selectedIds.value = selectedIds.value.filter((id) => known.has(id));
   } catch (e) {
     error.value = errMsg(e);
   } finally {
@@ -108,7 +128,12 @@ async function doImport() {
       data: importJson.value.trim() || undefined,
       engine: importEngine.value,
     });
-    alert(`导入完成：新增 ${res.added}，更新 ${res.updated}，跳过 ${res.skipped}`);
+    await showAlert(
+      `导入完成：新增 ${res.added}，更新 ${res.updated}，跳过 ${res.skipped}` +
+        (res.skipped
+          ? "\n提示：这里只导入普通书源。订阅源和媒体源请使用对应管理页，或通过 Legado 协议自动分类导入。"
+          : ""),
+    );
     showImport.value = false;
     importUrl.value = "";
     importJson.value = "";
@@ -126,17 +151,20 @@ async function toggle(s: SourceRow) {
     const r = await api.sourceToggle(s.id);
     s.enabled = r.enabled;
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 
 async function removeSelected(s: SourceRow) {
-  if (!confirm(`删除书源 ${s.sourceName || s.sourceUrl}？`)) return;
+  if (!await showConfirm(
+    `删除书源 ${s.sourceName || s.sourceUrl}？`,
+    { title: "删除书源", confirmText: "删除", danger: true },
+  )) return;
   try {
     await api.sourcesDelete([s.id]);
     await load();
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 
@@ -157,13 +185,80 @@ function filtered() {
       (s.sourceGroup ?? "").toLowerCase().includes(kw),
   );
 }
+
+const visibleIds = computed(() => filtered().map((source) => source.id));
+const allVisibleSelected = computed(() =>
+  visibleIds.value.length > 0
+  && visibleIds.value.every((id) => selectedIds.value.includes(id)),
+);
+
+function toggleSelected(id: number) {
+  selectedIds.value = selectedIds.value.includes(id)
+    ? selectedIds.value.filter((value) => value !== id)
+    : [...selectedIds.value, id];
+}
+
+function toggleAllVisible() {
+  const visible = new Set(visibleIds.value);
+  selectedIds.value = allVisibleSelected.value
+    ? selectedIds.value.filter((id) => !visible.has(id))
+    : [...new Set([...selectedIds.value, ...visibleIds.value])];
+}
+
+async function batchSetEnabled(enabled: boolean) {
+  const ids = [...selectedIds.value];
+  if (!ids.length || batchBusy.value) return;
+  batchBusy.value = true;
+  try {
+    await api.sourcesSetEnabled(ids, enabled);
+    const selected = new Set(ids);
+    items.value.forEach((source) => {
+      if (selected.has(source.id)) source.enabled = enabled;
+    });
+    selectedIds.value = [];
+  } catch (e) {
+    await showAlert(errMsg(e));
+  } finally {
+    batchBusy.value = false;
+  }
+}
+
+async function batchDelete() {
+  const ids = [...selectedIds.value];
+  if (!ids.length || batchBusy.value) return;
+  if (!await showConfirm(
+    `删除选中的 ${ids.length} 个书源？`,
+    { title: "批量删除书源", confirmText: "删除", danger: true },
+  )) return;
+  batchBusy.value = true;
+  try {
+    await api.sourcesDelete(ids);
+    selectedIds.value = [];
+    await load();
+  } catch (e) {
+    await showAlert(errMsg(e));
+  } finally {
+    batchBusy.value = false;
+  }
+}
 </script>
 
 <template>
   <div>
     <div class="bar">
       <h2 class="page-title">书源管理</h2>
-      <MiuixButton type="primary" @click="showImport = true">导入书源</MiuixButton>
+      <div class="bar-btns">
+        <MiuixButton
+          v-if="auth.can('rss.manage')"
+          @click="$router.push('/admin/rss-sources')"
+        >订阅源</MiuixButton>
+        <MiuixButton
+          v-if="auth.can('media.sources.manage')"
+          @click="$router.push('/admin/media-sources')"
+          title="导入 Legado RssSource / 视频 / 音频 / 漫画媒体源"
+        >媒体源</MiuixButton>
+        <MiuixButton type="primary" @click="showImport = true">导入书源</MiuixButton>
+      </div>
     </div>
 
     <MiuixInput v-model="keyword" label="搜索书源" single-line class="search" />
@@ -183,13 +278,41 @@ function filtered() {
       >{{ g.name }}<span class="g-count">{{ g.count }}</span></button>
     </div>
 
+    <BatchActionBar
+      :selected-count="selectedIds.length"
+      :total-count="visibleIds.length"
+      :all-selected="allVisibleSelected"
+      :busy="batchBusy"
+      @toggle-all="toggleAllVisible"
+      @clear="selectedIds = []"
+      @enable="batchSetEnabled(true)"
+      @disable="batchSetEnabled(false)"
+      @delete="batchDelete"
+    />
+
     <MiuixCard :show-indication="false" class="tbl-card">
       <table class="md-table">
         <thead>
-          <tr><th>名称</th><th>分组</th><th>URL</th><th>引擎</th><th>启用</th><th></th></tr>
+          <tr>
+            <th class="select-cell">
+              <MiuixCheckbox
+                :model-value="allVisibleSelected"
+                aria-label="全选当前书源"
+                @update:model-value="toggleAllVisible"
+              />
+            </th>
+            <th>名称</th><th>分组</th><th>URL</th><th>引擎</th><th>启用</th><th></th>
+          </tr>
         </thead>
         <tbody>
           <tr v-for="s in filtered()" :key="s.id">
+            <td class="select-cell">
+              <MiuixCheckbox
+                :model-value="selectedIds.includes(s.id)"
+                :aria-label="`选择书源 ${s.sourceName || s.sourceUrl}`"
+                @update:model-value="toggleSelected(s.id)"
+              />
+            </td>
             <td>{{ s.sourceName || "（未命名）" }}</td>
             <td class="grp-cell">
               <template v-if="s.sourceGroup">
@@ -219,7 +342,7 @@ function filtered() {
             </td>
           </tr>
           <tr v-if="!filtered().length">
-            <td colspan="6" class="empty">暂无书源，点击右上角导入。</td>
+            <td colspan="7" class="empty">暂无书源，点击右上角导入。</td>
           </tr>
         </tbody>
       </table>
@@ -277,13 +400,24 @@ function filtered() {
         </MiuixButton>
       </div>
     </MiuixDialog>
+
+    <!-- 全窗口拖入提示（带动画） -->
+    <FileDropOverlay v-model="dropping" @picked="onDropPicked" />
   </div>
 </template>
 
 <style scoped>
+.bar-btns {
+  display: flex;
+  gap: 8px;
+}
 .search {
   margin-bottom: 12px;
   max-width: 360px;
+}
+.select-cell {
+  width: 38px;
+  text-align: center;
 }
 .grp-row {
   display: flex;

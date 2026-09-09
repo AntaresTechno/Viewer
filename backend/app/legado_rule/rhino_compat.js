@@ -258,6 +258,58 @@
   G.Packages.java.text = G.Packages.java.text || {};
   G.Packages.javax = G.Packages.javax || {};
 
+  // ------------------------------------------------------------------- jsoup
+  // 部分书源直接调用 `org.jsoup.Jsoup.parse(html)`（没有 Packages 前缀）。
+  // Python 的 lxml 解析器经 java.jsoup 桥执行 CSS 查询；JS 侧保留 Jsoup 的
+  // Element / Elements 常用外形，避免把 Python DOM 对象跨 QuickJS 边界。
+  var _org = (G.Packages.org = G.Packages.org || {});
+  _org.jsoup = _org.jsoup || {};
+  G.org = _org;
+
+  function _jsoupCall(markup, operation, argument) {
+    var fn = _javaFn("jsoup");
+    if (!fn) return operation === "select" ? "[]" : "";
+    try { return fn(String(markup == null ? "" : markup), operation, argument); }
+    catch (e) { return operation === "select" ? "[]" : ""; }
+  }
+  function _jsoupElement(markup) {
+    var html = String(markup == null ? "" : markup);
+    return {
+      select: function (selector) {
+        return _jsoupElements(_jsoupCall(html, "select", String(selector)));
+      },
+      text: function () { return String(_jsoupCall(html, "text", "") || ""); },
+      attr: function (name) {
+        return String(_jsoupCall(html, "attr", String(name)) || "");
+      },
+      hasClass: function (name) {
+        return _jsoupCall(html, "hasClass", String(name)) === true;
+      },
+      outerHtml: function () { return html; },
+      toString: function () { return html; }
+    };
+  }
+  function _jsoupElements(raw) {
+    var values = raw;
+    if (typeof values === "string") {
+      try { values = JSON.parse(values); } catch (e) { values = []; }
+    }
+    if (!Array.isArray(values)) values = [];
+    var items = [];
+    for (var i = 0; i < values.length; i++) items.push(_jsoupElement(values[i]));
+    return {
+      size: function () { return items.length; },
+      get: function (index) {
+        index = Number(index);
+        return index >= 0 && index < items.length ? items[index] : null;
+      },
+      first: function () { return items.length ? items[0] : null; },
+      toArray: function () { return items.slice(); }
+    };
+  }
+  _org.jsoup.Jsoup = _org.jsoup.Jsoup || {};
+  _org.jsoup.Jsoup.parse = function (markup) { return _jsoupElement(markup); };
+
   // -------------------------------------------------------- JavaImporter 作用域
   // 每个包对象是可枚举成员容器，importPackage 时把「包下的类/子包」浅拷贝
   // 到 with 作用域对象上，使 `with(imports){ MediaType... }` 能解析到这些名字。

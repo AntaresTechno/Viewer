@@ -12,6 +12,7 @@ import PasswordField from "@/components/PasswordField.vue";
 import AppearancePanel from "@/components/AppearancePanel.vue";
 import { useAuth } from "@/stores/auth";
 import { api, errMsg } from "@/api/client";
+import { showConfirm } from "@/services/appDialog";
 
 const auth = useAuth();
 const $router = useRouter();
@@ -62,8 +63,8 @@ async function savePassword() {
   }
 }
 
-function logout() {
-  if (!confirm("确定退出登录？")) return;
+async function logout() {
+  if (!await showConfirm("确定退出登录？")) return;
   auth.logout();
   $router.push("/login");
 }

@@ -8,8 +8,8 @@ Mirrors the legado keys that live in CacheManager / CookieStore:
 - ``v_<sourceKey>_<k>``      source.put/get 数据
 - ``<domain>_cookie``        按「二级域名」保存的站点 Cookie
 
-legado 用 androidId 前 16 字节做 AES 加密保存登录信息；viewer 按移植规格
-（docs/spec/source-flow.md §4）改为本地明文 JSON，接口形状保持一致。
+legado 用 androidId 前 16 字节做 AES 加密保存登录信息；viewer 的服务端
+实现改为本地明文 JSON，接口形状保持一致。
 
 存储介质是一个带锁的 JSON 文件（backend/data/source_state.json）：
 登录状态是低频小数据，但需要在异步请求路径（net.fetch）与 JS 桥的

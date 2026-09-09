@@ -6,6 +6,7 @@ import { useAuth } from "@/stores/auth";
 import { useThemeStore } from "@/stores/theme";
 import { api } from "@/api/client";
 import AppearancePanel from "@/components/AppearancePanel.vue";
+import { showConfirm } from "@/services/appDialog";
 
 /**
  * 应用骨架：一块铬铁原则。
@@ -28,6 +29,7 @@ interface NavItem {
   icon: string;
   show: () => boolean;
   match: (p: string) => boolean;
+  parent?: string;
 }
 
 /* 线性小图标（stroke 风格，与系统字体粗细协调） */
@@ -51,6 +53,14 @@ const ICONS: Record<string, string> = {
   webdav:
     '<path d="M7.2 17.5a4.1 4.1 0 1 1 .55-8.16 5.3 5.3 0 0 1 10.28 1.42A3.55 3.55 0 0 1 17.3 17.5Z"/><path d="M12 12.5v4"/><path d="m10 14.5 2-2 2 2"/>',
   me: '<circle cx="12" cy="8.2" r="3.7"/><path d="M5 19.5c1.4-3.2 3.9-4.8 7-4.8s5.6 1.6 7 4.8"/>',
+  media:
+    '<rect x="3.8" y="6" width="16.4" height="12" rx="2.2"/><path d="m10.4 9.3 5 2.7-5 2.7z" fill="currentColor" stroke="none"/>',
+  comic:
+    '<rect x="4" y="4.5" width="16" height="15" rx="2.2"/><path d="M8.5 8.5h4"/><path d="M8.5 11.5h7"/><path d="M8.5 14.5h5"/>',
+  audio:
+    '<path d="M9.5 16.5V6.8l7-1.6v9"/><circle cx="7" cy="16.5" r="2.5"/><circle cx="14" cy="14" r="2.5"/>',
+  video:
+    '<rect x="3.5" y="6" width="13" height="12" rx="2.2"/><path d="m16.5 10 4-2.4v8.8l-4-2.4z"/>',
 };
 
 const nav: NavItem[] = [
@@ -67,6 +77,37 @@ const nav: NavItem[] = [
     icon: "shelf",
     show: () => true,
     match: (p) => p === "/shelf" || p.startsWith("/book/") || p.startsWith("/reader"),
+  },
+  {
+    label: "媒体库",
+    to: "/media",
+    icon: "media",
+    show: () => auth.can("media.read"),
+    match: (p) => p === "/media" || p.startsWith("/media/"),
+  },
+  {
+    label: "漫画",
+    to: "/media/comic",
+    icon: "comic",
+    parent: "/media",
+    show: () => auth.can("media.read"),
+    match: (p) => /^\/media\/comic(\/|$)/.test(p),
+  },
+  {
+    label: "音频",
+    to: "/media/audio",
+    icon: "audio",
+    parent: "/media",
+    show: () => auth.can("media.read"),
+    match: (p) => /^\/media\/audio(\/|$)/.test(p),
+  },
+  {
+    label: "视频",
+    to: "/media/video",
+    icon: "video",
+    parent: "/media",
+    show: () => auth.can("media.read"),
+    match: (p) => /^\/media\/video(\/|$)/.test(p),
   },
   {
     label: "订阅",
@@ -127,10 +168,31 @@ const nav: NavItem[] = [
 ];
 
 /** 分组：相邻的同类入口放在一起，分组标题解释「这一片是什么」。 */
-const groups: { label: string; items: NavItem[] }[] = [
-  { label: "阅读", items: nav.slice(0, 4) },
-  { label: "探索", items: nav.slice(4, 6) },
-  { label: "系统", items: nav.slice(6, 10) },
+const byTo = (to: string) => {
+  const found = nav.find((n) => n.to === to);
+  if (!found) throw new Error("nav item not found: " + to);
+  return found;
+};
+const groups: { label: string; items: NavItem[]; hideLabel?: boolean }[] = [
+  { label: "阅读", items: [byTo("/home"), byTo("/shelf")] },
+  {
+    label: "媒体库",
+    hideLabel: true,
+    items: [
+      byTo("/media"),
+      byTo("/media/comic"),
+      byTo("/media/audio"),
+      byTo("/media/video"),
+    ],
+  },
+  {
+    label: "探索",
+    items: [byTo("/search"), byTo("/explore"), byTo("/rss"), byTo("/library")],
+  },
+  {
+    label: "系统",
+    items: [byTo("/purify"), byTo("/webdav"), byTo("/admin"), byTo("/me")],
+  },
 ];
 
 const visibleGroups = computed(() =>
@@ -143,6 +205,11 @@ const visibleGroups = computed(() =>
 );
 
 const flatVisible = computed(() => visibleGroups.value.flatMap((g) => g.items));
+/** 移动端底栏只展示一级入口，媒体子菜单收进「媒体库」详情内部切换。 */
+const tabItems = computed(() => flatVisible.value.filter((i) => !i.parent));
+
+/** 桌面侧栏中的媒体入口折叠为一个主按钮；直达子页时自动展开。 */
+const mediaExpanded = ref(/^\/media\/(comic|audio|video)(\/|$)/.test(route.path));
 
 /* ---- 桌面侧栏滑块 ---- */
 const navEl = ref<HTMLElement | null>(null);
@@ -153,11 +220,19 @@ let measureRaf = 0;
 
 function setItemEl(to: string, el: unknown) {
   if (el instanceof HTMLElement) itemEls.set(to, el);
+  else itemEls.delete(to);
 }
 
 function moveThumb() {
-  const target = flatVisible.value.find((i) => i.active);
-  const el = target ? itemEls.get(target.to) : undefined;
+  // 父子菜单可能同时命中（例如「媒体库」匹配所有 /media/*），
+  // 取路径最长的那一项作高亮目标，这样滑块能在漫画/音频/视频子菜单间滑动。
+  const actives = flatVisible.value.filter((i) => i.active);
+  if (!actives.length) return;
+  const target = [...actives]
+    .sort((a, b) => b.to.length - a.to.length)
+    .find((item) => itemEls.has(item.to));
+  if (!target) return;
+  const el = itemEls.get(target.to);
   if (!el) return;
   thumb.value = {
     x: el.offsetLeft,
@@ -174,9 +249,13 @@ function scheduleThumbMeasure() {
 
 watch(
   () => route.path,
-  () => void nextTick(scheduleThumbMeasure),
+  (path) => {
+    if (/^\/media\/(comic|audio|video)(\/|$)/.test(path)) mediaExpanded.value = true;
+    void nextTick(scheduleThumbMeasure);
+  },
 );
 watch(flatVisible, () => void nextTick(scheduleThumbMeasure));
+watch(mediaExpanded, () => void nextTick(scheduleThumbMeasure));
 
 let ro: ResizeObserver | null = null;
 onMounted(() => {
@@ -216,6 +295,15 @@ function go(to: string) {
   if (route.path !== to) router.push(to);
 }
 
+function selectNav(item: NavItem) {
+  if (item.to === "/media") {
+    mediaExpanded.value = !mediaExpanded.value;
+    if (!route.path.startsWith("/media")) go("/media");
+    return;
+  }
+  go(item.to);
+}
+
 /* ---- 外观弹层（锚定在侧栏用户卡上方） ---- */
 const showAppearance = ref(false);
 const appearanceHost = ref<HTMLElement | null>(null);
@@ -243,8 +331,8 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", onDocKeydown);
 });
 
-function confirmLogout() {
-  if (!confirm("确定退出登录？")) return;
+async function confirmLogout() {
+  if (!await showConfirm("确定退出登录？")) return;
   auth.logout();
   router.push("/login");
 }
@@ -290,28 +378,47 @@ function onConnVisibility() {
           aria-hidden="true"
         ></span>
         <template v-for="grp in visibleGroups" :key="grp.label">
-          <div class="grp-label">{{ grp.label }}</div>
+          <div v-if="!grp.hideLabel" class="grp-label">{{ grp.label }}</div>
           <template v-for="it in grp.items" :key="it.to">
-            <button
-              v-if="it.visible"
-              class="rail-item"
-              :class="{ active: it.active }"
-              :ref="(el) => setItemEl(it.to, el)"
-              @click="go(it.to)"
+            <Transition
+              name="submenu"
+              @after-enter="scheduleThumbMeasure"
+              @after-leave="scheduleThumbMeasure"
             >
-              <svg
-                class="nic"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.7"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-                v-html="ICONS[it.icon]"
-              ></svg>
-              <span class="pill">{{ it.label }}</span>
-            </button>
+              <button
+                v-if="it.visible && (!it.parent || mediaExpanded)"
+                class="rail-item"
+                :class="{ active: it.active, child: !!it.parent, expandable: it.to === '/media' }"
+                :ref="(el) => setItemEl(it.to, el)"
+                :aria-expanded="it.to === '/media' ? mediaExpanded : undefined"
+                @click="selectNav(it)"
+              >
+                <svg
+                  class="nic"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                  v-html="ICONS[it.icon]"
+                ></svg>
+                <span class="pill">{{ it.label }}</span>
+                <svg
+                  v-if="it.to === '/media'"
+                  class="chevron"
+                  :class="{ open: mediaExpanded }"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                ><path d="m5 6 3 3 3-3" /></svg>
+              </button>
+            </Transition>
           </template>
         </template>
       </nav>
@@ -397,7 +504,7 @@ function onConnVisibility() {
     <!-- ======================= 移动端底部标签栏 ======================= -->
     <nav class="tabbar" aria-label="主导航">
       <button
-        v-for="it in flatVisible"
+        v-for="it in tabItems"
         :key="'t-' + it.to"
         type="button"
         class="tab-item"
@@ -556,6 +663,45 @@ function onConnVisibility() {
 .rail-item.active {
   color: var(--app-nav-active-foreground);
   font-weight: 650;
+}
+.rail-item.child {
+  height: calc(var(--app-nav-item-height) - 6px);
+  padding-left: 38px;
+  font-size: 13px;
+}
+.rail-item.child .nic {
+  width: 17px;
+  height: 17px;
+}
+.rail-item.expandable .pill {
+  flex: 1;
+}
+.chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  transition: transform var(--app-dur-calm) var(--app-ease-calm);
+}
+.chevron.open {
+  transform: rotate(180deg);
+}
+.submenu-enter-active,
+.submenu-leave-active {
+  transition:
+    opacity var(--app-dur-micro) var(--app-ease-calm),
+    transform var(--app-dur-calm) var(--app-ease-calm);
+}
+.submenu-enter-from,
+.submenu-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chevron,
+  .submenu-enter-active,
+  .submenu-leave-active {
+    transition: none;
+  }
 }
 
 /* 用户卡 + 身份操作：按钮一排在上，用户卡独占最底一行 */

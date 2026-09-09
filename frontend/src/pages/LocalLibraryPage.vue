@@ -5,6 +5,7 @@ import { api, errMsg, coverProxyUrl } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
 import LoadingImage from "@/components/LoadingImage.vue";
 import { openDetail } from "@/utils/reader";
+import { showAlert, showConfirm } from "@/services/appDialog";
 
 interface LibraryBook {
   sourceUrl: string;
@@ -97,19 +98,22 @@ async function download(book: LibraryBook) {
     });
     startPolling();
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 
 async function clearLibrary(book: LibraryBook) {
   const n = book.storedChapters;
-  if (!confirm(`清除《${book.name}》的全部 ${n} 章缓存？此操作不可撤销。`)) return;
+  if (!await showConfirm(
+    `清除《${book.name}》的全部 ${n} 章缓存？此操作不可撤销。`,
+    { title: "清除章节缓存", confirmText: "清除", danger: true },
+  )) return;
   try {
     await api.libraryClear(book.sourceUrl, book.bookUrl);
-    alert(`已清除《${book.name}》的 ${n} 章缓存。`);
+    await showAlert(`已清除《${book.name}》的 ${n} 章缓存。`);
     await load();
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 

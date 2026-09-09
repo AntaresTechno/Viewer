@@ -1,166 +1,83 @@
 # Viewer
 
-一个以 **Miuix / Material Design 3 双设计系统（运行时可切换，默认 MD3 蓝白，可切换深色/跟随系统）** 为前端、**FastAPI 插件化后端** 的在线阅读站点，内置与 [Legado（阅读）](https://github.com/gedoor/legado) 书源规则兼容的解析引擎。
+Viewer 是一个面向网络阅读与媒体源的自托管 Web 应用。前端使用 Vue 3，后端使用 FastAPI；书源、订阅、媒体、WebDAV、协议处理和规则引擎通过组件注册表装配。
 
-```
-viewer/
-├── backend/            # FastAPI + SQLAlchemy(async aiosqlite)
-│   ├── app/
-│   │   ├── core/       # 配置 / 数据库 / 安全(JWT+pbkdf2) / 依赖注入权限
-│   │   ├── models/     # User, Role, PluginState, BookSourceRow, ShelfItem, ReadProgress, ReadingStat, WebDavConfig …
-│   │   ├── plugins/    # 插件目录：auth home users roles plugins dashboard books webdav purify engine_legado
-│   │   ├── services/   # toc_queue（后台目录队列）/ daily_refresh（每日自动更新）/ content_purify …
-│   │   └── legado_rule/# Legado 规则引擎 Python 移植（AnalyzeRule/AnalyzeUrl/WebBook…）
-│   └── tests/          # 规则引擎单测 + e2e_smoke.ps1 全链路冒烟脚本
-├── frontend/           # Vite + Vue3 + TS + pinia + vue-router + miuix-vue（Miuix/MD3 双设计可切换）
-└── docs/spec/          # 从 Kotlin 源码提炼的三份规则语义规格书
-    ├── analyzer.md     # AnalyzeRule / 各分析器
-    ├── analyze-url.md  # AnalyzeUrl / CustomUrl
-    └── source-flow.md  # WebBook 搜索→详情→目录→正文流程
-```
+## 主要能力
 
-## 文档索引
-
-| 文档 | 用途 |
-|---|---|
-| [部署指南](docs/deployment.md) | 长期对外部署：systemd 常驻、反向代理/HTTPS、安全加固、备份与升级 |
-| [环境安装指南](docs/installation-guide.md) | 本机安装 / 二次开发：一键脚本、手动安装、`.env` 配置、FAQ |
-| [插件规范](docs/plugin-spec.md) | 三类组件 / `PLUGIN` 声明 / 工厂合约 / 编码约定 / 新增插件模板 |
-| [架构总览](docs/architecture.md) | 插件架构与模块关系 |
-| [规则语义规格](docs/spec/*.md) | Legado 规则引擎三份语义规格（由本仓库 `legado-with-MD3-main` 源码整理） |
+- 导入与管理 Legado 兼容来源；混合来源文件会自动分流到书源、订阅源、漫画源、音频源或视频源。
+- 维护个人书架、阅读进度、本地章节缓存与阅读统计。
+- 导入 RSS、Atom 和 Legado 订阅源，浏览文章并管理已读与收藏。
+- 管理漫画、音频和视频媒体源与媒体库。
+- 使用规则包净化正文，并缓存净化结果。
+- 将书架和进度备份到 WebDAV，或向 Legado 提供 `/dav` 同步端点。
+- 通过独立的协议桥和协议适配插件处理 `legado://`、`yuedu://` 等系统链接，并在确认后分类导入。
+- 安装、启停 ZIP 插件；插件可自带隔离运行的管理界面。
+- 使用用户、权限组和插件权限控制功能访问。
 
 ## 快速开始
 
-### 后端（推荐 uv + Python 3.12）
-
-项目已用 `build.bat` / `start.bat` 接入 **uv**：它们会自动用 uv 创建/复用 `backend\.venv`（Python 3.12，版本首次运行由 uv 下载到 `\.cache\uv\python`）并安装依赖。手动方式：
+Windows 推荐安装 [uv](https://docs.astral.sh/uv/) 和 Node.js 后直接运行：
 
 ```powershell
-cd viewer/backend
-uv venv --python 3.12 .venv
-uv pip install --python .venv\Scripts\python.exe -r requirements.txt
-.\.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\start.bat
 ```
 
-- 数据库自动创建于 `backend/data/viewer.db`，并种子三个系统权限组与默认管理员：
-  - **admin / view123456**（超级管理员，`*` 权限）
-- 书源脚本固定使用 **QuickJS**，不再提供运行时切换或其他 JS 后端。番茄等依赖 Rhino `JavaImporter`/`Packages` 的书源已内置兼容层。
-- 书源解析失败 `ReferenceError: JavaImporter is not defined` 已修复：每次创建 JS 上下文都注入 `rhino_compat.js`（`JavaImporter`/`importClass`/`importPackage`/`Packages` + okhttp3/hutool 兼容类）。
+首次启动会创建 SQLite 数据库和管理员账号：
 
-### 前端
+```text
+用户名：admin
+密码：view123456
+```
+
+登录后请立即修改密码。生产环境还必须固定 `VIEWER_SECRET_KEY`，否则进程重启后已有登录令牌会失效。
+
+开发模式：
 
 ```powershell
-cd viewer/frontend
-npm install
-npm run build        # 产物输出到 frontend/dist，由后端 SPA 挂载直接服务
-npm run dev          # 或开发模式（5173 端口代理 /api → 8000）
+.\start.bat dev
 ```
 
-构建完成后访问 **http://127.0.0.1:8000/** 即为完整站点（登录页 → 书架/搜索/阅读/管理）。
+- 生产入口：`http://127.0.0.1:8000`
+- 开发前端：`http://127.0.0.1:5173`
+- 后端接口文档：`http://127.0.0.1:8000/docs`
 
-### 一键脚本
+macOS、Linux、手动部署和环境变量配置见[安装与启动](docs/getting-started.md)。
 
-双击或命令行运行（均以脚本所在目录为基准）：
+## 项目结构
 
-| 脚本 | 作用 |
-| --- | --- |
-| `build.bat` | 首次运行自动用 uv 创建 Python 3.12 venv、安装后端依赖，npm install + vite 构建前端到 `frontend/dist` |
-| `start.bat` | 一键启动：确保依赖与 dist 后用 uvicorn 在 **http://127.0.0.1:8000/** 服务整站并自动打开浏览器 |
-| `start.bat dev` | 开发模式：同时启动 vite 热更新（5173，/api 代理到 8000）与后端（--reload） |
-
-## 功能一览
-
-| 区块 | 说明 |
-| --- | --- |
-| 外观 | 设计风格 **Miuix ⇄ Material You** 运行时切换（顶栏调色板按钮 / 「我的 → 外观」），浅色 / 深色 / 跟随系统，选择持久化于 localStorage 且首帧无闪烁 |
-| 认证 | 注册、登录（JWT 14 天）、个人资料（昵称/邮箱/简介/头像色相）、改密 |
-| 权限组 | 角色 CRUD、按插件聚合的权限目录（`ns.key` 命名空间 + 通配 `ns.*` 与全局 `*`）、用户↔多角色 |
-| 用户管理 | 关键字分页搜索、启停、超管开关（自我保护约束）、重置密码、删除 |
-| 插件管理 | 按规则引擎 / 插件 / 核心模块分区展示；可选组件可启停，核心模块固定启用；仅超级管理员 |
-| 仪表盘 | 用户/书源/书架/角色/插件统计 + 最近注册 |
-| 书城 | 书源导入（URL 或粘贴 legado JSON）、启停/删除；并发搜索（信号量 6、单源 25s 超时）；详情/目录（含 nextTocUrl 分页）/正文（含 nextContentUrl 合并翻页）；封面代理；书架与阅读进度 |
-| 订阅 | 兼容 md3-legado `RssSource` JSON；RSS/Atom 默认解析及 `ruleArticles` 自定义规则；分类、搜索、翻页、正文阅读、已读和收藏；订阅源导入/导出/启停/删除 |
-| 首页 | 侧栏「首页」选项卡（打开网站仍默认进书架）：最近阅读续读入口、今日/累计阅读时长、累计天数与在读本数、连续阅读天数、近 14 天柱状图、书架「有更新」提醒；阅读器每 30s 心跳上报在读时长（home 插件） |
-| WebDAV | 把书架/阅读进度/阅读统计备份到任意 WebDAV 网盘（坚果云/Alist 等）：配置测试、立即备份、云端列表恢复/删除，支持每日自动备份（webdav 插件） |
-| 自动更新 | 每天定时拉取书架全部书籍的最新目录（默认凌晨 4 点，`VIEWER_DAILY_REFRESH_HOUR` 可调），检测到新章的书架条目标记「有更新」，书架可按 加入时间 / 最近更新 / 最后阅读 排序 |
-
-## 插件架构
-
-每个后端组件位于 `app/plugins/<name>/plugin.py`，统一通过 `PLUGIN.kind`
-声明为 `engine`（规则引擎）、`plugin`（可选插件）或 `core`（核心模块）：
-
-**组件与 API 声明** —— 带 `create_router(ctx)` 时挂载到 `/api/<mount>`：
-
-```python
-PLUGIN = {
-    "kind": "plugin",
-    "name": "example",
-    "mount": "example",
-    "permissions": [("example.read", "查看示例")],
-}
-def create_router(ctx) -> APIRouter: ...
+```text
+viewer/
+├── backend/                 FastAPI、数据库、插件和测试
+│   └── app/plugins/         内置组件与外部 ZIP 插件安装位置
+├── frontend/                Vue 3 单页应用
+├── docs/                    项目文档
+├── build.bat                Windows 构建脚本
+└── start.bat                Windows 启动脚本
 ```
 
-**源规则引擎插件** —— 暴露 `ENGINE` + `create_engine(ctx)`，为书源提供解析能力：
+## 文档
 
-```python
-ENGINE = {"key": "legado", "title": "Legado 书源", ...}
-def create_engine(ctx) -> LegadoEngine: ...
-# 引擎对象需实现异步方法：
-#   search_book(src, key, page) / book_info(src, book)
-#   get_toc(src, book, toc_url) / get_content(src, book, chapter, ...)
-```
+完整目录见 [docs/README.md](docs/README.md)。
 
-内置引擎插件 **engine_legado** 包装了 `app/legado_rule/` 的全部解析实现。
-每个书源行记录自己的 `engine` 字段（导入时可用请求参数或源内 `"viewEngine"`
-键指定），books 插件按它把搜索/详情/目录/正文分发给对应引擎；
-`GET /api/books/engines` 列出所有已注册引擎及书源数量，前端导入对话框中可直接
-选择。要接入新的规则体系（私有 JSON 协议、其他 App 的书源格式等），只需新增
-一个引擎插件包，无需改动 books 插件。
+- [安装与启动](docs/getting-started.md)
+- [系统架构](docs/architecture.md)
+- [配置参考](docs/configuration.md)
+- [插件开发](docs/plugins.md)
+- [协议桥与 Legado 协议](docs/protocols.md)
+- [书源、订阅源与规则引擎](docs/sources-and-engines.md)
+- [API、认证与权限](docs/api-and-permissions.md)
+- [构建、测试与运维](docs/operations.md)
 
-启动时注册器扫描并挂载组件；`PLUGIN.permissions` 聚合成站点权限目录供「权限组」界面勾选。插件和规则引擎的停用状态存于 `plugin_states` 表；核心模块始终启用且不能被插件 ZIP 覆盖。旧版 `meta` 仍可兼容读取并自动推断类型。
-
-## Legado 规则引擎兼容性
-
-`app/legado_rule/` 是对 Legado Kotlin 分析器的行为级移植：
-
-- `RuleAnalyzer`（首现顶层分隔符优先、括号保护、代码平衡花括号）
-- jsoup 选择器方言（`class./tag./id./text.`、迷你关键字、`@` 链、终端提取、`[i:start:end:step]`/`[!...]` 索引）
-- JSONPath（jsonpath-ng + 内嵌 `{$.rule}` 替换回退）、XPath（lxml）、Regex 组列表
-- `##正则##替换`、`@get:{}`/`{{}}` 模板、`<js></js>` 与 `<js>...</js>` URL 管道、`@js:` 
-- `AnalyzeUrl`：POST 表单/JSON 默认头、charset、`<a,b,c>` 页码占位、headers 合并
-- WebBook 流程：搜索去重、目录双反转+去重（bug 兼容）、nextTocUrl 单/多链接策略、正文缩进排版
-
-语义依据见 `docs/spec/*.md`（直接从本仓库 `legado-with-MD3-main` 源码整理，未改动该目录）。
-
-## 本地联调夹具
-
-`dev-fixtures/site/` 是一个静态"迷你书站"（含两页目录与跨页正文），配合
-`dev-fixtures/sample-source.json` 可在完全离线情况下验证整条链路：
+## 开发验证
 
 ```powershell
-python -m http.server 8901 --directory viewer/dev-fixtures/site
-# 登录后 → 管理 → 书源管理 → 导入 → URL 填 http://127.0.0.1:8901/sample-source.json
-# → 搜索任意关键词即可命中两本书
-```
+cd backend
+.\.venv\Scripts\python.exe -m pytest -q
 
-## 测试
-
-```powershell
-cd viewer/backend
-.\.venv\Scripts\python -m pytest -q      # 规则引擎 + 插件架构 + 首页/WebDAV 插件测试
-.\tests\e2e_smoke.ps1                    # 需先启动 backend(8000) 与夹具站(8901)
+cd ..\frontend
+npm run build
 ```
 
 ## 许可证
 
-本项目以 **GNU General Public License v3（GPLv3）** 授权发布，全文见 [LICENSE](LICENSE)。
-使用、修改、再分发本项目需遵守该许可证条款。
-
-## 已知限制
-
-- 会话撤销：JWT 无服务端黑名单，禁用/删号后旧 token 至自然过期前仍可用。
-- 插件停用需重启后端生效（挂载发生在 import 时）。
-- 引擎以"行为兼容"为目标，个别 Kotlin 边角（如部分 JS 桥的 Android 专属方法）为桩实现。
-- 封面代理出于简化使用查询串传 token（img 标签无法带 Authorization 头）。
-- WebDAV 密码以 base64 混淆存储于本站数据库（可还原以便发起请求），非加密保管。
+本项目按根目录 [LICENSE](LICENSE) 中的条款发布。

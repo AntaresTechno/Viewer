@@ -97,3 +97,31 @@ class TestEngineRegistry:
                 asyncio.run(toggle_plugin("auth", False))
         finally:
             set_disabled_plugins(set())
+
+    def test_protocol_plugin_declares_and_honors_dependencies(self):
+        discover_plugins(force=True)
+        by_name = {item.name: item for item in all_plugins()}
+        assert by_name["protocol_legado"].requires == (
+            "protocol_bridge", "engine_legado", "rss", "media"
+        )
+        assert by_name["protocol_bridge"].ui is not None
+        assert by_name["protocol_bridge"].ui.entry == "ui/index.html"
+        assert by_name["protocol_legado"].ui is not None
+        assert by_name["protocol_legado"].ui.entry == "ui/index.html"
+        assert (
+            by_name["protocol_bridge"].module_name
+            != by_name["protocol_legado"].module_name
+        )
+        names = [item.name for item in all_plugins()]
+        assert names.index("protocol_bridge") < names.index("protocol_legado")
+        assert names.index("engine_legado") < names.index("protocol_legado")
+
+        with pytest.raises(ValueError, match="required by"):
+            asyncio.run(toggle_plugin("protocol_bridge", False))
+
+        set_disabled_plugins({"protocol_bridge"})
+        try:
+            assert plugin_enabled("protocol_bridge") is False
+            assert plugin_enabled("protocol_legado") is False
+        finally:
+            set_disabled_plugins(set())

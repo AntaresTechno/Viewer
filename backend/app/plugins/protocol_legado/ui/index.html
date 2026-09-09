@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 24px; color: #25222b; background: #fbf8ff; }
+    .panel { max-width: 760px; margin: auto; padding: 24px; border-radius: 22px; background: #fff; box-shadow: 0 8px 32px #39275a12; }
+    h1 { margin: 0 0 8px; font-size: 25px; }
+    p { color: #696371; line-height: 1.6; }
+    label { display: block; margin: 20px 0 8px; font-weight: 650; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 108px; resize: vertical; border: 1px solid #cfc5d9; border-radius: 14px; padding: 13px; color: inherit; background: transparent; font: 13px/1.5 ui-monospace, monospace; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    button { border: 0; border-radius: 999px; padding: 11px 18px; color: #fff; background: #675085; font: inherit; font-weight: 650; cursor: pointer; }
+    button.secondary { color: #4c3b60; background: #ede4f8; }
+    button:disabled { opacity: .5; cursor: default; }
+    .result { min-height: 24px; margin-top: 18px; padding: 14px; border-radius: 14px; background: #f2ecfb; white-space: pre-wrap; overflow-wrap: anywhere; }
+    @media (prefers-color-scheme: dark) {
+      body { color: #f0eaf6; background: #17141b; }
+      .panel { background: #211d26; box-shadow: none; }
+      p { color: #b9b0c1; }
+      textarea { border-color: #574b61; }
+      button.secondary { color: #e9dcf5; background: #443653; }
+      .result { background: #302838; }
+    }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <h1>Legado 协议工具</h1>
+    <p>这个插件独立实现 <code>legado://</code> 与 <code>yuedu://</code> 导入规则，并自动分流书源、订阅源、漫画、音频和视频源。</p>
+    <label for="uri">协议链接</label>
+    <textarea id="uri" spellcheck="false">legado://import/bookSource?src=https%3A%2F%2Fqyyuapi.com%2Fsy%2Fhx%2FV3.0.json</textarea>
+    <div class="actions">
+      <button id="check">检查链接</button>
+      <button id="import" disabled>确认并导入书源</button>
+      <button id="example" class="secondary">恢复示例</button>
+    </div>
+    <div id="result" class="result" role="status">等待检查。</div>
+  </main>
+  <script>
+    const example = "legado://import/bookSource?src=https%3A%2F%2Fqyyuapi.com%2Fsy%2Fhx%2FV3.0.json";
+    const uri = document.getElementById("uri");
+    const result = document.getElementById("result");
+    const importButton = document.getElementById("import");
+    let action = null;
+
+    uri.addEventListener("input", () => { action = null; importButton.disabled = true; });
+    document.getElementById("example").addEventListener("click", () => {
+      uri.value = example; action = null; importButton.disabled = true; result.textContent = "已恢复示例，等待检查。";
+    });
+    document.getElementById("check").addEventListener("click", async () => {
+      action = null; importButton.disabled = true; result.textContent = "正在检查…";
+      try {
+        action = await window.viewerPlugin.request("POST", "/resolve", { uri: uri.value.trim() });
+        result.textContent = action.title + "\n" + action.description + "\n来源：" + action.payload.src;
+        importButton.disabled = false;
+      } catch (error) { result.textContent = error.message; }
+    });
+    importButton.addEventListener("click", async () => {
+      if (!action || !await window.viewerPlugin.confirm(
+        "从该远程地址下载并自动分类导入来源？",
+        { title: "导入 Legado 来源", confirmText: "导入" }
+      )) return;
+      importButton.disabled = true; result.textContent = "正在下载和导入…";
+      try {
+        const value = await window.viewerPlugin.request("POST", "/import/sources", action.payload);
+        const kinds = value.classified || {};
+        result.textContent = `导入完成：新增 ${value.added}，更新 ${value.updated}，跳过 ${value.skipped}\n书源 ${kinds.books || 0} · 订阅 ${kinds.subscriptions || 0} · 漫画 ${kinds.comic || 0} · 音频 ${kinds.audio || 0} · 视频 ${kinds.video || 0}`;
+      } catch (error) { result.textContent = error.message; }
+      finally { importButton.disabled = false; }
+    });
+  </script>
+</body>
+</html>

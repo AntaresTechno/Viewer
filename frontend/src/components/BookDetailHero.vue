@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { api, errMsg, coverProxyUrl } from "@/api/client";
 import { FALLBACK_COVER_SVG, onCoverError } from "@/utils/cover";
 import LoadingImage from "@/components/LoadingImage.vue";
+import { showAlert } from "@/services/appDialog";
 
 /**
  * 统一详情头部：书架/搜索/发现进入的详情页与阅读器内「书籍信息」弹层
@@ -69,7 +70,7 @@ async function fetchIntro() {
       tocUrl: info.tocUrl?.trim() || "",
     });
   } catch (e) {
-    alert(`简介获取失败：${errMsg(e)}`);
+    await showAlert(`简介获取失败：${errMsg(e)}`);
   } finally {
     introLoading.value = false;
   }

@@ -76,6 +76,11 @@ def create_router(ctx: "PluginContext") -> APIRouter:
     )
     from ...plugins.registry import engine_keys, get_engine, plugin_enabled
     from ...services import content_cache
+    from ...services.book_source_import import (
+        BookSourceImportError,
+        import_book_sources,
+        parse_book_source_json,
+    )
 
     router = APIRouter(tags=["books"])
 
@@ -154,63 +159,16 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             if resp.error:
                 raise HTTPException(400, f"拉取失败: {resp.error}")
             text = resp.body
-        if not text or not text.strip():
-            raise HTTPException(400, "内容为空")
         try:
-            obj = json.loads(text)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(400, f"JSON 解析失败: {exc}") from exc
-        if isinstance(obj, dict):
-            obj = [obj]
-        if not isinstance(obj, list):
-            raise HTTPException(400, "需要书源对象或数组")
-
-        known_engines = set(engine_keys())
-        default_engine = body.engine or "legado"
-        if default_engine not in known_engines:
-            raise HTTPException(400, f"未知引擎: {default_engine}")
-
-        existing = {
-            r.source_url: r
-            for r in (await db.execute(select(BookSourceRow))).scalars().all()
-        }
-        added = updated = skipped = 0
-        for src in obj:
-            if not isinstance(src, dict):
-                skipped += 1
-                continue
-            surl = str(src.get("bookSourceUrl") or "").strip()
-            if not surl:
-                skipped += 1
-                continue
-            # per-source engine hint wins over the request-level default
-            eng = str(src.get("viewEngine") or default_engine).strip()
-            if eng not in known_engines:
-                skipped += 1
-                continue
-            raw = json.dumps(src, ensure_ascii=False)
-            name = str(src.get("bookSourceName") or "")
-            group_raw = src.get("bookSourceGroup") or ""
-            group = (
-                str(group_raw.split(",")[0]).strip()
-                if isinstance(group_raw, str) else ""
+            values = parse_book_source_json(text or "")
+            return await import_book_sources(
+                db,
+                values,
+                default_engine=body.engine or "legado",
+                known_engines=set(engine_keys()),
             )
-            if surl in existing:
-                row = existing[surl]
-                row.raw_json = raw
-                row.source_name = name
-                row.source_group = group
-                row.engine = eng
-                updated += 1
-            else:
-                db.add(BookSourceRow(
-                    source_url=surl, source_name=name,
-                    source_group=group, raw_json=raw, enabled=True,
-                    engine=eng,
-                ))
-                added += 1
-        await db.commit()
-        return {"added": added, "updated": updated, "skipped": skipped}
+        except BookSourceImportError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @router.get("/engines")
     async def list_engines(
@@ -274,6 +232,9 @@ def create_router(ctx: "PluginContext") -> APIRouter:
     class IdsBody(BaseModel):
         ids: list[int]
 
+    class SourceEnabledBody(IdsBody):
+        enabled: bool
+
     @router.post("/sources/delete")
     async def delete_sources(
         body: IdsBody,
@@ -300,6 +261,22 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         row.enabled = bool(body.enabled) if body.enabled is not None else not row.enabled
         await db.commit()
         return {"ok": True, "enabled": row.enabled}
+
+    @router.post("/sources/batch-enabled")
+    async def set_sources_enabled(
+        body: SourceEnabledBody,
+        current=Depends(require_perm("books.sources.manage")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        rows = (
+            await db.execute(
+                select(BookSourceRow).where(BookSourceRow.id.in_(body.ids))
+            )
+        ).scalars().all()
+        for row in rows:
+            row.enabled = body.enabled
+        await db.commit()
+        return {"updated": len(rows), "enabled": body.enabled}
 
     @router.get("/sources/{source_id}/detail")
     async def source_detail(

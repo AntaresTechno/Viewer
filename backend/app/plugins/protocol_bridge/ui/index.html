@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 24px; color: #25222b; background: #fbf8ff; }
+    .panel { max-width: 760px; margin: auto; padding: 24px; border-radius: 22px; background: #fff; box-shadow: 0 8px 32px #39275a12; }
+    h1 { margin: 0 0 8px; font-size: 25px; }
+    p { color: #696371; line-height: 1.6; }
+    .status { display: grid; gap: 8px; margin: 20px 0; padding: 16px; border-radius: 16px; background: #f2ecfb; }
+    .line { display: flex; justify-content: space-between; gap: 16px; }
+    .value { font-weight: 650; text-align: right; overflow-wrap: anywhere; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    button { border: 0; border-radius: 999px; padding: 11px 18px; color: #fff; background: #675085; font: inherit; font-weight: 650; cursor: pointer; }
+    button.secondary { color: #4c3b60; background: #ede4f8; }
+    button:disabled { opacity: .5; cursor: default; }
+    .message { min-height: 24px; margin-top: 16px; color: #7d3383; }
+    @media (prefers-color-scheme: dark) {
+      body { color: #f0eaf6; background: #17141b; }
+      .panel { background: #211d26; box-shadow: none; }
+      p { color: #b9b0c1; }
+      .status { background: #302838; }
+      button.secondary { color: #e9dcf5; background: #443653; }
+    }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <h1>协议桥设置</h1>
+    <p>协议桥只负责把操作系统的自定义链接送到 Viewer。具体协议格式由独立的协议插件提供。</p>
+    <section class="status">
+      <div class="line"><span>运行平台</span><span id="platform" class="value">读取中…</span></div>
+      <div class="line"><span>系统注册</span><span id="installed" class="value">读取中…</span></div>
+      <div class="line"><span>已接入协议</span><span id="schemes" class="value">—</span></div>
+      <div class="line"><span>处理目标</span><span id="target" class="value">—</span></div>
+    </section>
+    <div class="actions">
+      <button id="install">注册到当前系统</button>
+      <button id="remove" class="secondary">移除系统注册</button>
+      <button id="refresh" class="secondary">刷新状态</button>
+    </div>
+    <div id="message" class="message" role="status"></div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let status = null;
+    let busy = false;
+
+    function setMessage(text) { $("message").textContent = text || ""; }
+    function render(value) {
+      status = value;
+      $("platform").textContent = value.platform || "未知";
+      $("installed").textContent = value.installed ? "已注册" : "尚未注册";
+      $("schemes").textContent = value.schemes?.length
+        ? value.schemes.map((item) => item + "://").join("、") : "暂无协议插件接入";
+      $("target").textContent = value.target || "—";
+      $("install").disabled = busy || !value.supported || value.installed;
+      $("remove").disabled = busy || !value.installed;
+      $("refresh").disabled = busy;
+    }
+    async function refresh() {
+      busy = true;
+      if (status) render(status);
+      setMessage("");
+      try { render(await window.viewerPlugin.request("GET", "/native/status")); }
+      catch (error) { setMessage(error.message); }
+      finally { busy = false; if (status) render(status); }
+    }
+    $("install").addEventListener("click", async () => {
+      if (!await window.viewerPlugin.confirm(
+        "为运行 Viewer 后端的当前系统账户注册已接入的协议？",
+        { title: "注册系统协议", confirmText: "注册" }
+      )) return;
+      busy = true; render(status); setMessage("正在注册…");
+      try {
+        render(await window.viewerPlugin.request("POST", "/native/install", {
+          baseUrl: window.viewerPlugin.context.baseUrl,
+        }));
+        setMessage("系统协议注册完成。");
+      } catch (error) { setMessage(error.message); }
+      finally { busy = false; render(status); }
+    });
+    $("remove").addEventListener("click", async () => {
+      if (!await window.viewerPlugin.confirm(
+        "移除当前系统账户的 Viewer 协议注册？",
+        { title: "移除系统协议", confirmText: "移除", danger: true }
+      )) return;
+      busy = true; render(status); setMessage("正在移除…");
+      try {
+        render(await window.viewerPlugin.request("DELETE", "/native/install"));
+        setMessage("系统协议注册已移除。");
+      } catch (error) { setMessage(error.message); }
+      finally { busy = false; render(status); }
+    });
+    $("refresh").addEventListener("click", refresh);
+    refresh();
+  </script>
+</body>
+</html>

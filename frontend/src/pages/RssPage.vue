@@ -39,8 +39,6 @@ async function loadSources() {
     const data = await api.rssSources();
     sources.value = data.items;
     groups.value = data.groups;
-    const first = data.items.find((s) => s.enabled);
-    if (first) await selectSource(first);
   } catch (e) {
     error.value = errMsg(e);
   } finally {
@@ -57,6 +55,8 @@ async function selectSource(source: RssSource) {
   error.value = "";
   warning.value = "";
   articles.value = [];
+  sorts.value = [];
+  activeSort.value = null;
   if (source.singleUrl) {
     const data = await api.rssSorts(source.sourceUrl);
     window.open(data.items[0]?.url || source.sourceUrl, "_blank", "noopener,noreferrer");
@@ -230,6 +230,11 @@ function closeReader() {
       <p v-if="warning" class="warning">当前显示缓存内容：{{ warning }}</p>
       <p v-if="error" class="err error-box">{{ error }}</p>
       <div v-if="loading" class="center"><MiuixProgressIndicator /></div>
+
+      <div v-else-if="!activeSource && !favoritesMode" class="empty-state compact">
+        <h3>选择一个订阅源</h3>
+        <p>点击上方的订阅源标签加载文章。</p>
+      </div>
 
       <div v-else-if="!articles.length" class="empty-state compact">
         <h3>{{ favoritesMode ? "还没有收藏文章" : "这里暂时没有文章" }}</h3>

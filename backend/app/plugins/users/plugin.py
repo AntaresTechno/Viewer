@@ -56,6 +56,13 @@ def create_router(ctx: "PluginContext") -> APIRouter:
     class ResetPasswordBody(BaseModel):
         new_password: str = Field(min_length=6, max_length=128)
 
+    class BatchActiveBody(BaseModel):
+        ids: list[int]
+        active: bool
+
+    class BatchIdsBody(BaseModel):
+        ids: list[int]
+
     def _pub(u: User) -> dict:
         return {
             "id": u.id,
@@ -130,6 +137,49 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             setattr(u, k, v)
         await db.commit()
         return _pub(u)
+
+    @router.post("/batch-active")
+    async def set_users_active(
+        body: BatchActiveBody,
+        current=Depends(require_perm("users.update")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        actor, _ = current
+        ids = set(body.ids)
+        if not body.active and actor.id in ids:
+            raise HTTPException(400, "不能批量禁用自己")
+        rows = (
+            await db.execute(select(User).where(User.id.in_(ids)))
+        ).scalars().all()
+        for user in rows:
+            user.is_active = body.active
+        await db.commit()
+        return {"updated": len(rows), "active": body.active}
+
+    @router.post("/batch-delete")
+    async def delete_users(
+        body: BatchIdsBody,
+        current=Depends(require_perm("users.delete")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        actor, _ = current
+        ids = set(body.ids)
+        if actor.id in ids:
+            raise HTTPException(400, "不能批量删除自己")
+        rows = (
+            await db.execute(select(User).where(User.id.in_(ids)))
+        ).scalars().all()
+        selected_supers = sum(1 for user in rows if user.is_superuser)
+        if selected_supers:
+            supers = await db.scalar(
+                select(func.count()).select_from(User).where(User.is_superuser)
+            )
+            if (supers or 0) - selected_supers < 1:
+                raise HTTPException(400, "至少保留一个超级管理员")
+        for user in rows:
+            await db.delete(user)
+        await db.commit()
+        return {"deleted": len(rows)}
 
     @router.delete("/{user_id}")
     async def delete_user(

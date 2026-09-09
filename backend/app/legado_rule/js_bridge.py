@@ -12,6 +12,8 @@ import base64
 import hashlib
 import importlib
 import json
+import re
+import threading
 import time
 import urllib.parse
 import zlib
@@ -64,6 +66,8 @@ if (typeof java !== "undefined" && java) java.base64DecodeToByteArray = __vB64To
 """
 
 _engine_name: str | None = None
+_shared_js_lib_cache: dict[str, str] = {}
+_shared_js_lib_lock = threading.Lock()
 
 
 def _default_ajax_timeout() -> float:
@@ -165,12 +169,30 @@ def _js_args_unwrapped(fn: Callable[..., Any]) -> Callable[..., Any]:
     return _inner
 
 
+def _fetch_shared_js_lib(url: str) -> str:
+    """Download and cache one remote library from a Legado jsLib JSON map."""
+    with _shared_js_lib_lock:
+        cached = _shared_js_lib_cache.get(url)
+        if cached is not None:
+            return cached
+
+        from .net import fetch_sync
+
+        response = fetch_sync(url)
+        body = response.body or ""
+        if response.error or not response.ok or not body.strip():
+            detail = response.error or f"HTTP {response.status}"
+            raise JsUnavailableError(f"下载 jsLib 失败（{url}）：{detail}")
+        _shared_js_lib_cache[url] = body
+        return body
+
+
 def source_js_lib(source: Any) -> str:
     """The book-source ``jsLib`` (legado SharedJsScope) bound into rule JS.
 
-    Legado evaluates the source's ``jsLib`` into a shared scope that acts as
-    the prototype of every rule-JS scope, so functions defined there (cover(),
-    words(), …) are callable from any @js/{{}} rule of that source.
+    Legado accepts either inline JavaScript or a JSON name-to-URL map.  Map
+    values are downloaded once and evaluated in declaration order in the same
+    shared scope, so functions defined there are callable from any rule JS.
 
     The text is passed through :func:`rhino_dialect.normalize_js_lib` first:
     Rhino gives ``const``/``let`` script scope, so names declared inside a
@@ -180,10 +202,22 @@ def source_js_lib(source: Any) -> str:
     if isinstance(source, dict):
         lib = source.get("jsLib")
         if isinstance(lib, str) and lib.strip():
+            raw = lib.strip()
             try:
-                return normalize_js_lib(lib)
+                remote_map = json.loads(raw)
+            except (TypeError, ValueError):
+                remote_map = None
+            if isinstance(remote_map, dict):
+                scripts = [
+                    _fetch_shared_js_lib(str(value))
+                    for value in remote_map.values()
+                    if str(value).startswith(("http://", "https://"))
+                ]
+                raw = "\n;\n".join(scripts)
+            try:
+                return normalize_js_lib(raw)
             except Exception:  # noqa: BLE001 - 方言改写失败就用原文，不让书源整体失效
-                return lib
+                return raw
     return ""
 
 
@@ -211,13 +245,73 @@ class JavaBridge:
     def getElements(self, rule: str) -> list:
         if self._owner is None or not hasattr(self._owner, "get_elements"):
             raise RuleErrorNotAvailable("java.getElements 需要 AnalyzeRule 上下文")
-        return [_to_jsonable(e) for e in self._owner.get_elements(rule)]
+        # QuickJS callbacks cannot return Python lists/dicts.  The JS-side
+        # legado object prelude restores this JSON payload to an array.
+        return json.dumps(
+            [_to_jsonable(e) for e in self._owner.get_elements(rule)],
+            ensure_ascii=False,
+        )
 
     def getElement(self, rule: str):
         if self._owner is None or not hasattr(self._owner, "get_element"):
             raise RuleErrorNotAvailable("java.getElement 需要 AnalyzeRule 上下文")
         el = self._owner.get_element(rule)
-        return _to_jsonable(el)
+        return json.dumps(_to_jsonable(el), ensure_ascii=False)
+
+    def setContent(self, content: Any, base_url: Any = None) -> str:  # noqa: N802
+        """Mirror Legado's mutable rule content for JS-built result fragments."""
+        if self._owner is not None and hasattr(self._owner, "set_content"):
+            url = str(base_url) if base_url not in (None, "") else None
+            self._owner.set_content(content, url)
+        return str(content or "")
+
+    def jsoup(self, markup: Any, operation: Any, argument: Any = "") -> Any:
+        """Small ``org.jsoup.Jsoup`` bridge used by Rhino-style source JS.
+
+        QuickJS cannot receive lxml elements from Python directly.  The Rhino
+        compatibility layer therefore represents an Element by its outer HTML
+        and calls this method for the handful of Jsoup APIs commonly used by
+        sources: ``select``, ``text``, ``attr`` and ``hasClass``.
+        """
+        from .analyzer_css import _css_select, _outer_html, _text, parse_doc
+
+        try:
+            element = parse_doc(str(markup or ""))
+            op = str(operation or "")
+            if op == "select":
+                selector = str(argument or "")
+                # Jsoup accepts an unquoted attribute value containing ``:``
+                # (for example ``meta[property=og:novel:book_name]``), while
+                # cssselect requires it to be quoted.
+                selector = re.sub(
+                    r"(\[[^=\]]+=)([^\]'\"]+)(\])",
+                    lambda match: (
+                        match.group(1) + '"' + match.group(2).strip() + '"'
+                        + match.group(3)
+                    ),
+                    selector,
+                )
+                selected = _css_select(element, selector)
+                return json.dumps(
+                    [_outer_html(item) for item in selected],
+                    ensure_ascii=False,
+                )
+            # ``parse_doc('<a href=...>')`` creates an html/body document.
+            # A Jsoup Element reconstructed from its outer HTML must point at
+            # that sole child, rather than the synthetic html root.
+            candidates = element.xpath("./head/* | ./body/*") \
+                if getattr(element, "tag", None) == "html" else []
+            if len(candidates) == 1:
+                element = candidates[0]
+            if op == "text":
+                return _text(element)
+            if op == "attr":
+                return element.get(str(argument or ""), "")
+            if op == "hasClass":
+                return str(argument or "") in element.get("class", "").split()
+        except Exception:  # noqa: BLE001 - Jsoup returns an empty result on bad HTML/CSS
+            pass
+        return "[]" if str(operation or "") == "select" else ""
 
     # -------------------------------------------------------------- network
     def _owner_source(self) -> dict | None:
@@ -398,9 +492,84 @@ class JavaBridge:
             return json.dumps({"url": urlStr, "body": "", "code": -1,
                                "error": str(exc)}, ensure_ascii=False)
 
+    def head(self, url: str, headers=None) -> str:
+        """Legado ``java.head`` returning a JS-wrapped ``StrResponse``."""
+        from .net import fetch_sync_ex
+
+        src = self._owner_source()
+        try:
+            response = fetch_sync_ex(
+                str(url), method="HEAD",
+                headers=headers if isinstance(headers, dict) else None,
+                cookie_jar=src.get("enabledCookieJar") is not False
+                if isinstance(src, dict) else False,
+            )
+            return json.dumps({
+                "url": response.url,
+                "body": response.body,
+                "code": response.status,
+                "headers": response.headers,
+                "message": response.error or "",
+                "method": "HEAD",
+            }, ensure_ascii=False)
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({
+                "url": str(url), "body": "", "code": -1,
+                "headers": {}, "message": str(exc), "method": "HEAD",
+            }, ensure_ascii=False)
+
+    def importScript(self, path: str) -> str:
+        """Load a remote script with Legado's URL-keyed CacheManager semantics."""
+        url = str(path or "").strip()
+        if not url.startswith(("http://", "https://")):
+            raise RuleErrorNotAvailable("java.importScript 仅支持 HTTP(S) 远程脚本")
+
+        from . import source_state
+        from .net import fetch_sync
+
+        key = self.md5Encode16(url)
+        cached = source_state.cache_get(key)
+        if cached:
+            return cached
+        response = fetch_sync(url)
+        body = response.body or ""
+        if response.error or not response.ok or not body.strip():
+            detail = response.error or f"HTTP {response.status}"
+            raise RuleErrorNotAvailable(f"{url} 内容获取失败：{detail}")
+        source_state.cache_put(key, body)
+        return body
+
     # ---------------------------------------------------------------- cache
-    def get(self, key) -> str:
-        return self._cache.get(str(key), "")
+    def get(self, key, headers=None) -> str:
+        """Legado ``java.get`` HTTP helper, retaining the old local-KV fallback."""
+        target = str(key)
+        if not target.startswith(("http://", "https://")):
+            return self._cache.get(target, "")
+
+        from .net import fetch_sync_ex
+
+        src = self._owner_source()
+        try:
+            response = fetch_sync_ex(
+                target,
+                method="GET",
+                headers=headers if isinstance(headers, dict) else None,
+                cookie_jar=src.get("enabledCookieJar") is not False
+                if isinstance(src, dict) else False,
+            )
+            return json.dumps({
+                "url": response.url,
+                "body": response.body,
+                "code": response.status,
+                "headers": response.headers,
+                "message": response.error or "",
+                "method": "GET",
+            }, ensure_ascii=False)
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({
+                "url": target, "body": "", "code": -1,
+                "headers": {}, "message": str(exc), "method": "GET",
+            }, ensure_ascii=False)
 
     def put(self, key, value) -> str:
         self._cache[str(key)] = str(value)
@@ -439,6 +608,51 @@ class JavaBridge:
     def base64DecodeToByteArray(self, s):
         raw = str(s).strip() + "=" * (-len(str(s).strip()) % 4)
         return list(base64.b64decode(raw))
+
+    def aesBase64DecodeToString(self, data, key, transformation="AES/ECB/PKCS7Padding",
+                                iv="") -> str:
+        """Legado/JCA-compatible AES Base64 decoder used by encrypted rules."""
+        from .aes_compat import decrypt
+
+        parts = str(transformation or "AES/ECB/PKCS7Padding").upper().split("/")
+        if not parts or parts[0] != "AES":
+            raise RuleErrorNotAvailable(
+                f"不支持的对称解密算法：{transformation}"
+            )
+        mode = parts[1] if len(parts) > 1 else "ECB"
+        padding = parts[2] if len(parts) > 2 else "PKCS7PADDING"
+        raw = str(data or "").strip()
+        raw += "=" * (-len(raw) % 4)
+        decrypted = decrypt(
+            base64.b64decode(raw),
+            str(key or "").encode("utf-8"),
+            mode=mode,
+            iv=str(iv or "").encode("utf-8"),
+            unpad=padding in {"PKCS5PADDING", "PKCS7PADDING"},
+        )
+        return decrypted.decode("utf-8")
+
+    def aesEncodeToBase64String(self, data, key,
+                                transformation="AES/ECB/PKCS7Padding",
+                                iv="") -> str:
+        """Legado/JCA-compatible AES encoder returning standard Base64."""
+        from .aes_compat import encrypt
+
+        parts = str(transformation or "AES/ECB/PKCS7Padding").upper().split("/")
+        if not parts or parts[0] != "AES":
+            raise RuleErrorNotAvailable(
+                f"不支持的对称加密算法：{transformation}"
+            )
+        mode = parts[1] if len(parts) > 1 else "ECB"
+        padding = parts[2] if len(parts) > 2 else "PKCS7PADDING"
+        encrypted = encrypt(
+            _js_string(data).encode("utf-8"),
+            str(key or "").encode("utf-8"),
+            mode=mode,
+            iv=str(iv or "").encode("utf-8"),
+            pad=padding in {"PKCS5PADDING", "PKCS7PADDING"},
+        )
+        return base64.b64encode(encrypted).decode("ascii")
 
     def hexDecodeToString(self, h) -> str:
         try:
@@ -547,6 +761,11 @@ class JavaBridge:
              origin: Any = None) -> None:
         """legado: RssJsExtensions.open —— 打开宿主页面（这里是登录页）。"""
         self.log("[open]", name, url, title, origin)
+
+    def webView(self, html: Any = "", url: Any = "", js: Any = "") -> str:
+        """Headless host fallback for rules that optionally probe a WebView."""
+        self.log("[webView unavailable]", url)
+        return ""
 
     def refreshExplore(self) -> None:
         """legado: BaseSource.refreshExplore / SourceLoginJsExtensions。"""
@@ -713,6 +932,17 @@ def _safe_json(v: Any) -> Any:
         return _to_jsonable(v)
 
 
+def _js_string(value: Any) -> str:
+    """Match JavaScript ``String(value)`` for primitive bridge arguments."""
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
+
+
 class JsEvaluator:
     """Evaluates one JS snippet with legado-style bindings."""
 
@@ -811,6 +1041,11 @@ class JsEvaluator:
             # source jsLib first so rules can call its functions; it may use java.*
             # （jsLib 用到的类名经 with(javaImport) 从 Packages 解析到兼容实现）
             lines.append(self.js_lib)
+            # jsLib is user-authored and frequently omits its final semicolon.
+            # The next binding chunk may start with an IIFE, so without an
+            # explicit statement boundary `let host = "..."\n(function(){})()`
+            # is parsed as an attempted call on the string value.
+            lines.append(";")
         for k, v in bindings.items():
             if not k.isidentifier() or k.startswith("__"):
                 continue

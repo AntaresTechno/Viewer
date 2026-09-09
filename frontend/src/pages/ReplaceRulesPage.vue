@@ -10,6 +10,7 @@ import {
 import { api, errMsg } from "@/api/client";
 import type { ReplaceRuleItem } from "@/api/client";
 import { useAuth } from "@/stores/auth";
+import { showConfirm } from "@/services/appDialog";
 
 const auth = useAuth();
 const canManage = () => auth.can("books.replace.manage");
@@ -72,7 +73,10 @@ async function toggle(r: ReplaceRuleItem) {
 }
 
 async function remove(r: ReplaceRuleItem) {
-  if (!confirm(`删除规则「${r.name || r.pattern.slice(0, 20)}」？`)) return;
+  if (!await showConfirm(
+    `删除规则「${r.name || r.pattern.slice(0, 20)}」？`,
+    { title: "删除替换规则", confirmText: "删除", danger: true },
+  )) return;
   try {
     await api.replaceDelete([r.id]);
     items.value = items.value.filter((x) => x.id !== r.id);

@@ -161,7 +161,15 @@ async def build_backup_payload(user_id: int) -> tuple[str, dict]:
     from sqlalchemy import select
 
     from ...core.db import get_session_factory
-    from ...models import ReadingStat, ReadProgress, ShelfItem, User
+    from ...models import (
+        MediaLibraryItem,
+        MediaProgress,
+        MediaSourceRow,
+        ReadingStat,
+        ReadProgress,
+        ShelfItem,
+        User,
+    )
 
     factory = get_session_factory()
     async with factory() as db:
@@ -175,13 +183,28 @@ async def build_backup_payload(user_id: int) -> tuple[str, dict]:
         stats = (await db.execute(
             select(ReadingStat).where(ReadingStat.user_id == user_id)
         )).scalars().all()
+        # 媒体库（媒体源是管理员共享配置，不进普通用户备份；条目/进度按用户）
+        media_items = (await db.execute(
+            select(MediaLibraryItem).where(MediaLibraryItem.user_id == user_id)
+        )).scalars().all()
+        media_progress = (await db.execute(
+            select(MediaProgress).where(MediaProgress.user_id == user_id)
+        )).scalars().all()
 
         def iso(dt):
             return dt.isoformat() if dt else None
 
+        src_ids = {m.source_id for m in media_items}
+        sources = {
+            s.id: s for s in (await db.execute(
+                select(MediaSourceRow).where(MediaSourceRow.id.in_(src_ids))
+            )).scalars().all()
+        } if src_ids else {}
+        media_item_by_id = {m.id: m for m in media_items}
+
         payload = {
             "app": "antares-viewer",
-            "version": 1,
+            "version": 2,
             "exportedAt": datetime.now(timezone.utc).isoformat(),
             "user": {
                 "id": user.id,
@@ -215,11 +238,59 @@ async def build_backup_payload(user_id: int) -> tuple[str, dict]:
                 {"day": r.day, "bookUrl": r.book_url, "seconds": r.seconds}
                 for r in stats
             ],
+            "mediaLibrary": [
+                {
+                    "sourceFormat": (sources.get(m.source_id).source_format
+                                     if m.source_id in sources else ""),
+                    "sourceKey": (sources.get(m.source_id).source_key
+                                  if m.source_id in sources else ""),
+                    "sourceName": (sources.get(m.source_id).source_name
+                                   if m.source_id in sources else ""),
+                    "mediaKind": m.media_kind,
+                    "itemKey": m.item_key,
+                    "itemUrl": m.item_url,
+                    "title": m.title,
+                    "creator": m.creator,
+                    "coverUrl": m.cover_url,
+                    "intro": m.intro,
+                    "tags": m.tags_json or [],
+                    "latestUnit": m.latest_unit,
+                    "totalUnits": m.total_units,
+                    "createdAt": iso(m.created_at),
+                }
+                for m in media_items
+            ],
+            "mediaProgress": [
+                {
+                    "itemKey": (media_item_by_id[p.library_item_id].item_key
+                                if p.library_item_id in media_item_by_id else ""),
+                    "sourceFormat": (sources.get(media_item_by_id[p.library_item_id].source_id).source_format
+                                     if p.library_item_id in media_item_by_id
+                                     and media_item_by_id[p.library_item_id].source_id in sources else ""),
+                    "sourceKey": (sources.get(media_item_by_id[p.library_item_id].source_id).source_key
+                                  if p.library_item_id in media_item_by_id
+                                  and media_item_by_id[p.library_item_id].source_id in sources else ""),
+                    "unitKey": p.unit_key,
+                    "unitIndex": p.unit_index,
+                    "unitTitle": p.unit_title,
+                    "positionMs": p.position_ms,
+                    "durationMs": p.duration_ms,
+                    "pageIndex": p.page_index,
+                    "pageCount": p.page_count,
+                    "completed": p.completed,
+                    "legacyState": p.legacy_state_json or {},
+                    "updatedAt": iso(p.updated_at),
+                }
+                for p in media_progress
+                if p.library_item_id in media_item_by_id
+            ],
         }
         counts = {
             "shelf": len(shelf),
             "progress": len(progress),
             "readingStats": len(stats),
+            "mediaLibrary": len(media_items),
+            "mediaProgress": len(media_progress),
         }
     return _json.dumps(payload, ensure_ascii=False), counts
 
@@ -587,6 +658,125 @@ def create_router(ctx: "PluginContext") -> APIRouter:
                 row.seconds = secs
                 stat_merged += 1
 
+        # ---------------- 媒体库 / 进度（按稳定 (sourceKey, itemKey) 合并） ----------------
+        media_lib_added = media_prog_updated = 0
+        try:
+            from ...models import MediaLibraryItem, MediaProgress, MediaSourceRow
+
+            existing_sources = {
+                (s.source_format, s.source_key): s for s in (await db.execute(
+                    select(MediaSourceRow)
+                )).scalars().all()
+            }
+            existing_media = (await db.execute(
+                select(MediaLibraryItem).where(MediaLibraryItem.user_id == user.id)
+            )).scalars().all()
+            media_by_item: dict[tuple[int, str], MediaLibraryItem] = {
+                (m.source_id, m.item_key): m for m in existing_media
+            }
+            media_id_to_item = {m.id: m for m in existing_media}
+
+            for item in data.get("mediaLibrary", []) or []:
+                fmt = str(item.get("sourceFormat") or "rss")
+                skey = str(item.get("sourceKey") or "")
+                ikey = str(item.get("itemKey") or "")
+                if not skey or not ikey:
+                    continue
+                source = existing_sources.get((fmt, skey))
+                if source is None:
+                    source = MediaSourceRow(
+                        source_format=fmt, source_key=skey,
+                        source_name=str(item.get("sourceName") or ""),
+                        media_kind=str(item.get("mediaKind") or "") or "video",
+                    )
+                    db.add(source)
+                    await db.flush()
+                    existing_sources[(fmt, skey)] = source
+                row = media_by_item.get((source.id, ikey))
+                if row is None:
+                    row = MediaLibraryItem(
+                        user_id=user.id, source_id=source.id, item_key=ikey,
+                        media_kind=str(item.get("mediaKind") or source.media_kind or "video"),
+                        item_url=str(item.get("itemUrl") or ""),
+                        title=str(item.get("title") or ""),
+                        creator=str(item.get("creator") or ""),
+                        cover_url=str(item.get("coverUrl") or ""),
+                        intro=str(item.get("intro") or ""),
+                        tags_json=item.get("tags") or [],
+                        latest_unit=str(item.get("latestUnit") or ""),
+                        total_units=int(item.get("totalUnits") or 0),
+                    )
+                    db.add(row)
+                    await db.flush()
+                    media_by_item[(source.id, ikey)] = row
+                    media_lib_added += 1
+                else:
+                    for attr, col in (
+                        ("title", "title"), ("creator", "creator"),
+                        ("coverUrl", "cover_url"), ("intro", "intro"),
+                        ("latestUnit", "latest_unit"),
+                    ):
+                        v = str(item.get(attr) or "")
+                        if v:
+                            setattr(row, col, v)
+                    if item.get("totalUnits") is not None:
+                        row.total_units = int(item["totalUnits"])
+
+            existing_prog_media = {
+                p.library_item_id: p for p in (await db.execute(
+                    select(MediaProgress).where(MediaProgress.user_id == user.id)
+                )).scalars().all()
+            }
+
+            for item in data.get("mediaProgress", []) or []:
+                fmt = str(item.get("sourceFormat") or "")
+                skey = str(item.get("sourceKey") or "")
+                ikey = str(item.get("itemKey") or "")
+                if not skey or not ikey:
+                    continue
+                source = existing_sources.get((fmt, skey))
+                if source is None:
+                    continue
+                lib = media_by_item.get((source.id, ikey))
+                if lib is None:
+                    continue
+                remote_at = parse_dt(item.get("updatedAt"))
+                prog = existing_prog_media.get(lib.id)
+                if prog is None:
+                    prog = MediaProgress(user_id=user.id, library_item_id=lib.id)
+                    db.add(prog)
+                    existing_prog_media[lib.id] = prog
+                else:
+                    local_at = _aware(prog.updated_at)
+                    if local_at is not None and (remote_at is None or remote_at <= local_at):
+                        continue  # 本地更新，不改
+                if item.get("unitKey"):
+                    prog.unit_key = str(item["unitKey"])
+                prog.unit_index = int(item.get("unitIndex") or 0)
+                prog.unit_title = str(item.get("unitTitle") or "")
+                if item.get("positionMs") is not None:
+                    prog.position_ms = int(item["positionMs"])
+                if item.get("durationMs") is not None:
+                    prog.duration_ms = int(item["durationMs"])
+                if item.get("pageIndex") is not None:
+                    prog.page_index = int(item["pageIndex"])
+                if item.get("pageCount") is not None:
+                    prog.page_count = int(item["pageCount"])
+                prog.completed = bool(item.get("completed") or False)
+                if item.get("legacyState"):
+                    from ...plugins.media.legacy_document import sanitize_legacy_state
+
+                    prog.legacy_state_json = sanitize_legacy_state(item["legacyState"])
+                if remote_at:
+                    prog.updated_at = remote_at
+                media_prog_updated += 1
+
+        except Exception as exc:  # noqa: BLE001 - 媒体恢复失败不阻塞书架/进度恢复
+            import logging
+
+            logging.getLogger("viewer.webdav").warning(
+                "media restore skipped: %r", exc)
+
         await db.commit()
         return {
             "ok": True,
@@ -594,6 +784,8 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             "shelfUpdated": shelf_updated,
             "progressUpdated": prog_updated,
             "statsMerged": stat_merged,
+            "mediaLibraryAdded": media_lib_added,
+            "mediaProgressUpdated": media_prog_updated,
         }
 
     @router.delete("/backups/{name}")

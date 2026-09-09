@@ -89,6 +89,17 @@ def test_rss_import_browse_read_favorite_and_delete(monkeypatch):
             assert listed["groups"] == ["技术", "新闻"]
             source_id = listed["items"][0]["id"]
 
+            disabled = await call(
+                client, "POST", "/api/rss/sources/batch-enabled",
+                json={"ids": [source_id], "enabled": False},
+            )
+            assert disabled.json() == {"updated": 1, "enabled": False}
+            assert (await call(client, "GET", "/api/rss/sources")).json()["items"][0]["enabled"] is False
+            await call(
+                client, "POST", "/api/rss/sources/batch-enabled",
+                json={"ids": [source_id], "enabled": True},
+            )
+
             sorts = await call(client, "GET", "/api/rss/sorts", params={
                 "source_url": source["sourceUrl"],
             })

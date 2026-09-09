@@ -3,7 +3,7 @@
 Every package declares exactly one product-facing kind through ``PLUGIN``:
 
 1. ``core``: bundled core module; always enabled and cannot be toggled.
-2. ``plugin``: optional feature plugin; may expose API routes.
+2. ``plugin``: optional feature plugin; may expose API routes and a bundled UI.
 3. ``engine``: source-rule engine; exposes ``ENGINE`` + ``create_engine`` and
    may additionally expose management API routes.
 
@@ -26,6 +26,8 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import pkgutil
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 
 @dataclasses.dataclass
@@ -47,6 +49,14 @@ class PluginContext:
 
 
 @dataclasses.dataclass
+class PluginUiInfo:
+    """A plugin-owned, self-contained HTML management interface."""
+
+    entry: str
+    title: str
+
+
+@dataclasses.dataclass
 class PluginInfo:
     name: str
     mount: str | None
@@ -58,6 +68,8 @@ class PluginInfo:
     create_router: Any | None
     module_name: str
     kind: str
+    requires: tuple[str, ...] = ()
+    ui: PluginUiInfo | None = None
     legacy_manifest: bool = False
     # 可选：挂在站点根路径（/api 之外）的路由工厂，如 WebDAV 服务端 /dav
     mount_root: str | None = None
@@ -86,6 +98,57 @@ PLUGIN_KIND_LABELS = {
     "core": "核心模块",
 }
 
+_MAX_PLUGIN_UI_BYTES = 2 * 1024 * 1024
+
+
+def parse_plugin_ui(manifest: dict, module: Any) -> PluginUiInfo | None:
+    """Validate the optional UI declaration without executing frontend code."""
+    raw = manifest.get("ui")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("PLUGIN.ui must be an object")
+    entry = str(raw.get("entry") or "").strip()
+    title = str(raw.get("title") or manifest.get("title") or manifest["name"]).strip()
+    rel = PurePosixPath(entry)
+    if (
+        not entry
+        or "\\" in entry
+        or rel.is_absolute()
+        or ".." in rel.parts
+        or rel.suffix.lower() != ".html"
+    ):
+        raise ValueError("PLUGIN.ui.entry must be a relative .html path")
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        raise ValueError("plugin module has no filesystem location")
+    root = Path(module_file).resolve().parent
+    target = root.joinpath(*rel.parts).resolve()
+    if root != target and root not in target.parents:
+        raise ValueError("PLUGIN.ui.entry escapes the plugin directory")
+    if not target.is_file():
+        raise ValueError(f"PLUGIN.ui.entry does not exist: {entry}")
+    if target.stat().st_size > _MAX_PLUGIN_UI_BYTES:
+        raise ValueError("PLUGIN.ui.entry exceeds 2 MiB")
+    return PluginUiInfo(entry=entry, title=title or manifest["name"])
+
+
+def load_plugin_ui(info: PluginInfo) -> str:
+    """Read a validated plugin UI entry, re-checking containment and size."""
+    if info.ui is None:
+        raise ValueError(f"plugin '{info.name}' has no UI")
+    module = importlib.import_module(info.module_name)
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        raise ValueError("plugin module has no filesystem location")
+    root = Path(module_file).resolve().parent
+    target = root.joinpath(*PurePosixPath(info.ui.entry).parts).resolve()
+    if root != target and root not in target.parents:
+        raise ValueError("plugin UI path escapes the plugin directory")
+    if not target.is_file() or target.stat().st_size > _MAX_PLUGIN_UI_BYTES:
+        raise ValueError("plugin UI entry is missing or too large")
+    return target.read_text(encoding="utf-8")
+
 
 def set_disabled_plugins(disabled: set[str]) -> None:
     """Live view of disabled plugins so engine lookups can respect them."""
@@ -104,8 +167,20 @@ def plugin_enabled(name: str) -> bool:
     Plugins may call this to delegate behavior to each other without a hard
     dependency: when disabled the caller falls back to its own code path.
     """
-    info = discover_plugins().get(name)
-    return bool(info and (info.kind == "core" or name not in _DISABLED_PLUGINS))
+    discovered = discover_plugins()
+
+    def _enabled(plugin_name: str, visiting: set[str]) -> bool:
+        info = discovered.get(plugin_name)
+        if info is None or plugin_name in visiting:
+            return False
+        if info.kind != "core" and plugin_name in _DISABLED_PLUGINS:
+            return False
+        return all(
+            _enabled(required, visiting | {plugin_name})
+            for required in info.requires
+        )
+
+    return _enabled(name, set())
 
 
 def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
@@ -141,7 +216,19 @@ def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
             legacy_manifest = isinstance(manifest, dict)
         if not isinstance(manifest, dict):
             continue
-        if create_router is None and not (isinstance(engine_meta, dict) and create_engine):
+        if not str(manifest.get("name") or "").strip():
+            print(f"[plugins] skipped '{mod_info.name}': PLUGIN.name is required")
+            continue
+        try:
+            ui = parse_plugin_ui(manifest, module)
+        except (OSError, UnicodeError, ValueError) as exc:
+            print(f"[plugins] skipped '{mod_info.name}': invalid UI declaration: {exc}")
+            continue
+        if (
+            create_router is None
+            and not (isinstance(engine_meta, dict) and create_engine)
+            and ui is None
+        ):
             continue
         inferred_kind = "engine" if isinstance(engine_meta, dict) and create_engine else "plugin"
         if canonical_manifest and not str(manifest.get("kind") or "").strip():
@@ -165,6 +252,12 @@ def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
             create_router=create_router,
             module_name=module.__name__,
             kind=kind,
+            requires=tuple(dict.fromkeys(
+                str(item).strip()
+                for item in manifest.get("requires", [])
+                if str(item).strip()
+            )),
+            ui=ui,
             legacy_manifest=legacy_manifest,
             mount_root=manifest.get("mount_root") if create_root_router else None,
             create_root_router=create_root_router if manifest.get("mount_root") else None,
@@ -180,7 +273,22 @@ def discover_plugins(force: bool = False) -> dict[str, PluginInfo]:
                 plugin_name=info.name,
                 factory=create_engine,
             )
-    _CACHE = dict(sorted(found.items(), key=lambda kv: (kv[1].order, kv[1].name)))
+    # Stable topological order: dependency routers are created before plugins
+    # that register handlers or other capabilities with them.
+    pending = dict(sorted(found.items(), key=lambda kv: (kv[1].order, kv[1].name)))
+    ordered: dict[str, PluginInfo] = {}
+    while pending:
+        ready = [
+            name for name, info in pending.items()
+            if all(required not in pending for required in info.requires)
+        ]
+        # Cycles remain visible in the management UI; plugin_enabled marks
+        # them unavailable rather than hiding a configuration error.
+        if not ready:
+            ready = [next(iter(pending))]
+        name = ready[0]
+        ordered[name] = pending.pop(name)
+    _CACHE = ordered
     _ENGINE_CACHE = engines
     return _CACHE
 
@@ -257,7 +365,18 @@ def enabled_plugin_names() -> set[str]:
             discovered = discover_plugins()
             known = set(discovered)
             core = {name for name, info in discovered.items() if info.kind == "core"}
-            return ((known - disabled) | (enabled_extra & known)) | core
+            candidates = ((known - disabled) | (enabled_extra & known)) | core
+            changed = True
+            while changed:
+                changed = False
+                for name in tuple(candidates):
+                    if any(
+                        required not in candidates
+                        for required in discovered[name].requires
+                    ):
+                        candidates.remove(name)
+                        changed = True
+            return candidates
 
     try:
         asyncio.get_running_loop()
@@ -279,6 +398,23 @@ async def toggle_plugin(name: str, enabled: bool) -> None:
         raise KeyError(f"unknown plugin: {name}")
     if info.kind == "core":
         raise ValueError(f"core module '{name}' cannot be disabled")
+    if enabled:
+        unavailable = [dep for dep in info.requires if not plugin_enabled(dep)]
+        if unavailable:
+            raise ValueError(
+                f"plugin '{name}' requires enabled plugin(s): "
+                + ", ".join(unavailable)
+            )
+    else:
+        dependents = [
+            item.name for item in all_plugins()
+            if name in item.requires and plugin_enabled(item.name)
+        ]
+        if dependents:
+            raise ValueError(
+                f"plugin '{name}' is required by enabled plugin(s): "
+                + ", ".join(dependents)
+            )
 
     factory = get_session_factory()
     async with factory() as session:

@@ -111,13 +111,17 @@ async def already_ran_today() -> bool:
 
 
 async def run_once(reason: str) -> dict | None:
-    """执行一轮「目录刷新 → 自动备份」，返回统计（异常时记日志返回 None）。"""
+    """执行一轮「目录刷新 → 媒体刷新 → 自动备份」，返回统计（异常记日志返回 None）。"""
     try:
         stats = await refresh_all_shelves()
+        from .media_refresh import refresh_all_media
+
+        media_stats = await refresh_all_media()
         backups = await auto_backup_enabled_users()
         await mark_ran()
-        log.info("daily refresh (%s): %s, webdav backups=%s", reason, stats, backups)
-        return {**stats, "backups": backups}
+        log.info("daily refresh (%s): %s, media=%s, webdav backups=%s",
+                 reason, stats, media_stats, backups)
+        return {**stats, "media": media_stats, "backups": backups}
     except Exception as exc:  # noqa: BLE001 — 调度循环绝不因此退出
         log.error("daily refresh failed: %r", exc)
         return None

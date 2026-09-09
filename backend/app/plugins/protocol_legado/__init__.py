@@ -1,0 +1,1 @@
+"""Legado custom protocol plugin."""

@@ -43,6 +43,10 @@ class IdsBody(BaseModel):
     ids: list[int]
 
 
+class SourceEnabledBody(IdsBody):
+    enabled: bool
+
+
 def _source_dict(row) -> dict:
     try:
         source = json.loads(row.raw_json)
@@ -91,6 +95,10 @@ def create_router(ctx: "PluginContext") -> APIRouter:
     from ...core.deps import require_perm
     from ...legado_rule.net import fetch
     from ...models import RssArticleRow, RssFavorite, RssReadState, RssSourceRow
+    from ...services.rss_source_import import (
+        RssSourceImportError,
+        import_rss_sources,
+    )
 
     router = APIRouter(tags=["rss"])
 
@@ -136,49 +144,10 @@ def create_router(ctx: "PluginContext") -> APIRouter:
             obj = json.loads(text)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, f"JSON 解析失败: {exc}") from exc
-        if isinstance(obj, dict):
-            obj = obj.get("items", obj.get("data", obj))
-        if isinstance(obj, dict):
-            obj = [obj]
-        if not isinstance(obj, list):
-            raise HTTPException(400, "需要订阅源对象或数组")
-        existing = {
-            r.source_url: r for r in (await db.execute(select(RssSourceRow))).scalars().all()
-        }
-        added = updated = skipped = 0
-        for item in obj:
-            if not isinstance(item, dict):
-                skipped += 1
-                continue
-            source_url = str(item.get("sourceUrl") or "").strip()
-            if not source_url:
-                skipped += 1
-                continue
-            raw = json.dumps(item, ensure_ascii=False)
-            row = existing.get(source_url)
-            try:
-                custom_order = int(item.get("customOrder") or 0)
-            except (TypeError, ValueError):
-                custom_order = 0
-            values = {
-                "source_name": str(item.get("sourceName") or ""),
-                "source_icon": str(item.get("sourceIcon") or ""),
-                "source_group": str(item.get("sourceGroup") or ""),
-                "source_comment": str(item.get("sourceComment") or ""),
-                "custom_order": custom_order,
-                "raw_json": raw,
-            }
-            if row:
-                for key, value in values.items():
-                    setattr(row, key, value)
-                updated += 1
-            else:
-                row = RssSourceRow(source_url=source_url, enabled=bool(item.get("enabled", True)), **values)
-                db.add(row)
-                existing[source_url] = row
-                added += 1
-        await db.commit()
-        return {"added": added, "updated": updated, "skipped": skipped}
+        try:
+            return await import_rss_sources(db, obj)
+        except RssSourceImportError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @router.post("/sources/delete")
     async def delete_sources(
@@ -212,6 +181,22 @@ def create_router(ctx: "PluginContext") -> APIRouter:
         row.enabled = not row.enabled
         await db.commit()
         return {"enabled": row.enabled}
+
+    @router.post("/sources/batch-enabled")
+    async def set_sources_enabled(
+        body: SourceEnabledBody,
+        current=Depends(require_perm("rss.manage")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        rows = (
+            await db.execute(
+                select(RssSourceRow).where(RssSourceRow.id.in_(body.ids))
+            )
+        ).scalars().all()
+        for row in rows:
+            row.enabled = body.enabled
+        await db.commit()
+        return {"updated": len(rows), "enabled": body.enabled}
 
     @router.get("/sources/export")
     async def export_sources(

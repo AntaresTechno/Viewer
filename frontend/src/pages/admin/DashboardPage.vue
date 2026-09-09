@@ -27,6 +27,8 @@ onMounted(async () => {
 const cards = [
   ["users_total", "用户", "/admin/users"],
   ["sources_total", "书源", "/admin/sources"],
+  ["rss_sources_total", "订阅源", "/admin/rss-sources"],
+  ["media_sources_total", "媒体源", "/admin/media-sources"],
   ["shelf_total", "书架条目", "/shelf"],
   ["roles_total", "权限组", "/admin/roles"],
 ] as const;
@@ -97,7 +99,7 @@ const cards = [
       </MiuixCard>
 
       <p v-if="auth.isSuperuser" class="tip">
-        提示：插件启停与书源管理在「管理」分区。
+        提示：插件启停、书源、订阅源和媒体源管理均在「管理」分区。
       </p>
     </template>
     <div v-else class="center">{{ error || "无法加载" }}</div>

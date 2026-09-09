@@ -462,3 +462,131 @@ class AppKV(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
+
+
+class MediaSourceRow(Base):
+    """媒体库插件：管理员共享的媒体源（RssSource / BookSource 两种方言）。
+
+    ``source_format`` = rss | book；``media_kind`` = comic | audio | video。
+    ``raw_json`` 无损保存原始 Legado JSON，导入/导出往返不丢字段。
+    """
+
+    __tablename__ = "media_sources"
+    __table_args__ = (
+        UniqueConstraint("source_format", "source_key", name="uq_media_source"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 原 sourceUrl 或 bookSourceUrl
+    source_key: Mapped[str] = mapped_column(String(1024))
+    source_name: Mapped[str] = mapped_column(String(256), default="", index=True)
+    source_icon: Mapped[str] = mapped_column(String(1024), default="")
+    source_group: Mapped[str] = mapped_column(String(256), default="")
+    source_comment: Mapped[str] = mapped_column(Text, default="")
+    source_format: Mapped[str] = mapped_column(String(8), default="rss")
+    media_kind: Mapped[str] = mapped_column(String(8), default="video", index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    custom_order: Mapped[int] = mapped_column(Integer, default=0)
+    raw_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MediaLibraryItem(Base):
+    """媒体库条目：某个用户加入媒体库的一部 漫画/音频/视频。
+
+    定位信息用稳定 ``item_key``（源规则给的最优先，次为规范化 itemUrl），
+    不做标题去重。只缓存稳定元数据，不保存短时效的流地址。
+    """
+
+    __tablename__ = "media_library_items"
+    __table_args__ = (
+        UniqueConstraint("user_id", "source_id", "item_key", name="uq_media_lib_item"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("media_sources.id", ondelete="CASCADE"), index=True
+    )
+    media_kind: Mapped[str] = mapped_column(String(8), default="video", index=True)
+    item_key: Mapped[str] = mapped_column(String(1024))
+    item_url: Mapped[str] = mapped_column(String(2048), default="")
+    title: Mapped[str] = mapped_column(String(256), default="")
+    creator: Mapped[str] = mapped_column(String(256), default="")
+    cover_url: Mapped[str] = mapped_column(String(2048), default="")
+    intro: Mapped[str] = mapped_column(Text, default="")
+    tags_json: Mapped[list] = mapped_column(JSON, default=list)
+    latest_unit: Mapped[str] = mapped_column(String(256), default="")
+    total_units: Mapped[int] = mapped_column(Integer, default=0)
+    content_fingerprint: Mapped[str] = mapped_column(String(128), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    content_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    has_update: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class MediaUnit(Base):
+    """媒体库条目下的分集/章节（稳定定位信息缓存）。
+
+    共享表：同一 (source_id, item_key) 只有一份分集集，供所有收藏它的用户
+    复用。``locator`` 是供源适配器再次解析的逻辑地址或 ID；不保存短时效
+    MP4/M3U8/带签名音频地址。
+    """
+
+    __tablename__ = "media_units"
+    __table_args__ = (
+        UniqueConstraint("source_id", "item_key", "unit_key", name="uq_media_unit"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("media_sources.id", ondelete="CASCADE"), index=True
+    )
+    item_key: Mapped[str] = mapped_column(String(1024), index=True)
+    unit_key: Mapped[str] = mapped_column(String(2048))
+    unit_index: Mapped[int] = mapped_column(Integer, default=0)
+    title: Mapped[str] = mapped_column(String(256), default="")
+    locator: Mapped[str] = mapped_column(Text, default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MediaProgress(Base):
+    """媒体库条目的阅览进度（按用户隔离，user+library_item 唯一）。
+
+    video/audio 用 position_ms；comic 用 page_index/page_count；旧式 HTML
+    播放器用受限的 legacy_state_json（容量受控，禁止写入任意大对象）。
+    """
+
+    __tablename__ = "media_progress"
+    __table_args__ = (
+        UniqueConstraint("user_id", "library_item_id", name="uq_media_progress"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    library_item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("media_library_items.id", ondelete="CASCADE"), index=True
+    )
+    unit_key: Mapped[str] = mapped_column(String(2048), default="")
+    unit_index: Mapped[int] = mapped_column(Integer, default=0)
+    unit_title: Mapped[str] = mapped_column(String(256), default="")
+    position_ms: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    page_index: Mapped[int] = mapped_column(Integer, default=0)
+    page_count: Mapped[int] = mapped_column(Integer, default=0)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    legacy_state_json: Mapped[list] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

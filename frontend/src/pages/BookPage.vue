@@ -13,6 +13,7 @@ import {
 import type { Chapter, ShelfEntry, SourceInfo } from "@/api/client";
 import BookDetailHero from "@/components/BookDetailHero.vue";
 import { openReader } from "@/utils/reader";
+import { showAlert } from "@/services/appDialog";
 
 const route = useRoute();
 const router = useRouter();
@@ -182,7 +183,7 @@ function refreshToc() {
   if (!inShelf.value) return;
   api.shelfRefreshToc(inShelf.value.id)
     .then(() => startPolling())
-    .catch((e) => alert(errMsg(e)));
+    .catch((e) => void showAlert(errMsg(e)));
 }
 
 /** 目录在后台队列抓取：轮询书架状态直到完成或失败。 */
@@ -221,7 +222,7 @@ async function loadToc(force = false) {
     tocCached.value = r.cached;
     void autoRefreshToc();
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   } finally {
     loadingToc.value = false;
   }
@@ -332,7 +333,7 @@ async function addToShelf() {
     inShelf.value =
       shelf.items.find((x) => x.bookUrl === bookUrl) ?? null;
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 
@@ -342,7 +343,7 @@ async function removeFromShelf() {
     await api.shelfRemove(inShelf.value.id);
     inShelf.value = null;
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   }
 }
 
@@ -360,9 +361,9 @@ async function downloadToLibrary() {
       author: info.value.author ?? "",
       cover: displayCover.value,
     });
-    alert("已开始下载到本地书库，可在「本地库」页查看进度。");
+    await showAlert("已开始下载到本地书库，可在「本地库」页查看进度。");
   } catch (e) {
-    alert(errMsg(e));
+    await showAlert(errMsg(e));
   } finally {
     libDownloading = false;
   }

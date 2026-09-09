@@ -14,6 +14,7 @@ import type {
   PurifyRuleItem,
 } from "@/api/client";
 import { useAuth } from "@/stores/auth";
+import { showConfirm } from "@/services/appDialog";
 
 /**
  * 正文净化插件管理页。三个规则来源：
@@ -111,7 +112,10 @@ async function toggleWuyunPack() {
 async function removeWuyunPack() {
   const item = wuyunItem.value;
   if (!item?.packId) return;
-  if (!confirm("卸载乌云净化规则包？（缓存会在下次阅读时自动重建）")) return;
+  if (!await showConfirm(
+    "卸载乌云净化规则包？（缓存会在下次阅读时自动重建）",
+    { title: "卸载规则包", confirmText: "卸载", danger: true },
+  )) return;
   try {
     await api.purifyDeletePack(item.packId);
     msg.value = "乌云净化已卸载";
@@ -195,7 +199,10 @@ async function togglePack(p: PurifyPack) {
 }
 
 async function removePack(p: PurifyPack) {
-  if (!confirm(`删除规则包「${p.name}」及其全部规则？`)) return;
+  if (!await showConfirm(
+    `删除规则包「${p.name}」及其全部规则？`,
+    { title: "删除规则包", confirmText: "删除", danger: true },
+  )) return;
   try {
     await api.purifyDeletePack(p.id);
     packs.value = packs.value.filter((x) => x.id !== p.id);
@@ -248,7 +255,10 @@ async function toggleRule(r: PurifyRuleItem) {
 }
 
 async function removeRule(r: PurifyRuleItem) {
-  if (!confirm(`删除规则「${r.name || r.pattern.slice(0, 20)}」？`)) return;
+  if (!await showConfirm(
+    `删除规则「${r.name || r.pattern.slice(0, 20)}」？`,
+    { title: "删除规则", confirmText: "删除", danger: true },
+  )) return;
   try {
     await api.purifyDeleteRules([r.id]);
     await reloadRules(r.packId);
@@ -320,7 +330,10 @@ async function runTest() {
 const clearing = ref(false);
 async function clearCache(bookUrl = "") {
   const label = bookUrl ? "该书" : "全部";
-  if (!confirm(`确定清空${label}的净化缓存？下次阅读将重新获取并净化。`)) return;
+  if (!await showConfirm(
+    `确定清空${label}的净化缓存？下次阅读将重新获取并净化。`,
+    { title: "清空净化缓存", confirmText: "清空", danger: true },
+  )) return;
   clearing.value = true;
   try {
     await api.purifyClearCache("", bookUrl);

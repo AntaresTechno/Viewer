@@ -19,6 +19,14 @@ const router = createRouter({
         { path: "explore", component: () => import("@/pages/ExplorePage.vue") },
         { path: "library", component: () => import("@/pages/LocalLibraryPage.vue") },
         {
+          path: "/protocol",
+          component: () => import("@/pages/ProtocolPage.vue"),
+        },
+        {
+          path: "/protocol/:scheme/:host/:action",
+          component: () => import("@/pages/ProtocolPage.vue"),
+        },
+        {
           path: "book/:bookUrl",
           component: () => import("@/pages/BookPage.vue"),
           props: true,
@@ -61,12 +69,50 @@ const router = createRouter({
           component: () => import("@/pages/admin/PluginsPage.vue"),
         },
         {
+          path: "admin/plugins/:name",
+          component: () => import("@/pages/admin/PluginUiPage.vue"),
+          props: true,
+        },
+        {
           path: "admin/sources",
           component: () => import("@/pages/admin/SourcesPage.vue"),
         },
         {
           path: "admin/rss-sources",
           component: () => import("@/pages/admin/RssSourcesPage.vue"),
+        },
+        {
+          path: "admin/media-sources",
+          component: () => import("@/pages/admin/MediaSourcesPage.vue"),
+        },
+        // ---- 媒体库 ----------------------------------------------------
+        {
+          path: "media",
+          component: () => import("@/pages/media/MediaOverviewPage.vue"),
+        },
+        {
+          path: "media/:kind",
+          component: () => import("@/pages/media/MediaLibraryPage.vue"),
+          props: true,
+        },
+        {
+          path: "media/discover",
+          component: () => import("@/pages/media/MediaDiscoverPage.vue"),
+        },
+        {
+          path: "media/detail/:id",
+          component: () => import("@/pages/media/MediaDetailPage.vue"),
+          props: true,
+        },
+        {
+          path: "media/play/:id",
+          component: () => import("@/pages/media/MediaPlayerPage.vue"),
+          props: true,
+        },
+        {
+          path: "media/comic-read/:id",
+          component: () => import("@/pages/media/ComicReaderPage.vue"),
+          props: true,
         },
       ],
     },

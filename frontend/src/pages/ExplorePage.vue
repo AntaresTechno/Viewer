@@ -79,18 +79,13 @@ onMounted(async () => {
   try {
     const r = await api.sourcesList();
     sources.value = r.items.filter((s) => s.enabled);
-    // 只列出并选中首个源，不自动加载分类 —— 分类由「加载分类」按钮手动触发，
-    // 避免每次进发现页就打一排重量级请求（番茄的 exploreUrl 会串 15s 预热）。
-    if (sources.value.length) {
-      selectSource(sources.value[0].sourceUrl);
-    }
   } catch (e) {
     error.value = errMsg(e);
   }
 });
 
-/** 选中源并清空旧状态；不自动拉取分类，由「加载分类」按钮触发。 */
-function selectSource(url: string) {
+/** 点击源标签即选中并加载分类；进入页面时不自动请求。 */
+async function selectSource(url: string) {
   activeSource.value = url;
   kinds.value = [];
   values.value = {};
@@ -99,6 +94,7 @@ function selectSource(url: string) {
   error.value = "";
   logs.value = [];
   done.value = false;
+  await loadKinds(url);
 }
 
 async function loadKinds(url: string) {
@@ -251,12 +247,11 @@ async function openBook(b: BookResult) {
       </span>
     </div>
 
-    <!-- 手动加载分类：进入页面 / 切换源都不自动拉，点按钮才请求 -->
     <div
-      v-if="sources.length && activeSource && !kinds.length && !loadingKinds"
-      class="center load-row"
+      v-if="sources.length && !activeSource && !loadingKinds"
+      class="center empty"
     >
-      <MiuixButton @click="loadKinds(activeSource)">加载分类</MiuixButton>
+      点击上方的书源标签加载发现分类。
     </div>
 
     <!-- 控件矩阵：按 legado 的 flex 算法排行，每行 6 格 -->
@@ -552,8 +547,5 @@ async function openBook(b: BookResult) {
   display: flex;
   justify-content: center;
   margin: 22px 0 6px;
-}
-.load-row {
-  margin: 14px 0 4px;
 }
 </style>

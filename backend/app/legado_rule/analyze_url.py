@@ -483,6 +483,10 @@ class _UrlBridge:
     def __getattr__(self, name):  # delegate everything to base bridge
         return getattr(self._base, name)
 
+    def __dir__(self):
+        """Expose delegated JavaBridge methods to the JS callable registry."""
+        return sorted(set(super().__dir__()) | set(dir(self._base)))
+
     def put(self, key: str, value: str) -> str:
         return self._base.put(key, value)
 

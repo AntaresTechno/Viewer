@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { useRouter } from "vue-router";
+import AppDialogHost from "@/components/AppDialogHost.vue";
 </script>
 
 <template>
   <router-view />
+  <AppDialogHost />
 </template>

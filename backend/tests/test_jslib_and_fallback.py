@@ -6,6 +6,8 @@ bookUrlPattern redirect handling.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.legado_rule.analyze_rule import AnalyzeRule
@@ -61,6 +63,95 @@ def test_jslib_callable_from_rule_js():
     assert ar.get_string("@js:shout('abc')") == "ABC"
 
 
+def test_remote_jslib_map_downloads_and_injects_in_order(monkeypatch):
+    from app.legado_rule import js_bridge
+
+    urls = ["https://lib.test/source.js", "https://lib.test/common.js"]
+    scripts = {
+        urls[0]: "var sourceValue = 'source'; function sourceFn(){return 'S';}",
+        urls[1]: "function combined(){return sourceFn() + sourceValue + 'C';}",
+    }
+    fetched = []
+
+    def fake_fetch(url: str) -> str:
+        fetched.append(url)
+        return scripts[url]
+
+    monkeypatch.setattr(js_bridge, "_fetch_shared_js_lib", fake_fetch)
+    source = {
+        "bookSourceUrl": "https://www.example.com/",
+        "jsLib": json.dumps(dict(zip(("source", "common"), urls))),
+    }
+    ar = AnalyzeRule(source=source)
+
+    assert ar.get_string("@js:combined()") == "SsourceC"
+    assert fetched == urls
+
+
+def test_head_response_exposes_case_insensitive_header(monkeypatch):
+    from app.legado_rule import js_bridge
+
+    monkeypatch.setattr(
+        js_bridge.JavaBridge,
+        "head",
+        lambda self, url, headers=None: json.dumps({
+            "url": url,
+            "body": "",
+            "code": 200,
+            "headers": {"ETag": '"v1"'},
+            "method": "HEAD",
+        }),
+    )
+    ev = js_bridge.JsEvaluator({"__bridge__": js_bridge.JavaBridge()})
+
+    assert ev.eval("java.head('https://lib.test/a.js', {}).header('etag')") == '"v1"'
+
+
+def test_get_response_exposes_body_method(monkeypatch):
+    from app.legado_rule import js_bridge
+
+    monkeypatch.setattr(
+        js_bridge.JavaBridge,
+        "get",
+        lambda self, url, headers=None: json.dumps({
+            "url": url, "body": "activation-json", "code": 200,
+        }),
+    )
+    ev = js_bridge.JsEvaluator({"__bridge__": js_bridge.JavaBridge()})
+
+    assert ev.eval("java.get('https://lib.test/status', {}).body()") == "activation-json"
+
+
+def test_aes_base64_decode_and_symmetric_crypto_object():
+    """Encrypted sources can use both Legado AES helper API shapes."""
+    from app.legado_rule import js_bridge
+
+    # AES-128 ECB, PKCS#7: OpenSSL-compatible ciphertext for ``hello legado``.
+    encrypted = "6u5dxaAprJCdqNIKCMublg=="
+    ev = js_bridge.JsEvaluator({"__bridge__": js_bridge.JavaBridge()})
+
+    direct = ev.eval(
+        "java.aesBase64DecodeToString("
+        f"'{encrypted}', '####xiao-han&&&&', 'AES/ECB/PKCS7Padding', '')"
+    )
+    wrapped = ev.eval(
+        "java.createSymmetricCrypto("
+        "'AES/ECB/PKCS7Padding', '####xiao-han&&&&', '').decryptStr("
+        f"'{encrypted}')"
+    )
+    assert direct == "hello legado"
+    assert wrapped == direct
+    assert ev.eval(
+        "java.aesEncodeToBase64String("
+        "'hello legado', '####xiao-han&&&&', 'AES/ECB/PKCS7Padding', '')"
+    ) == encrypted
+    assert ev.eval(
+        "java.aesBase64DecodeToString("
+        "java.aesEncodeToBase64String(false, '####xiao-han&&&&'), "
+        "'####xiao-han&&&&')"
+    ) == "false"
+
+
 def test_no_jslib_leaves_others_unaffected():
     src = {"bookSourceUrl": "https://www.example.com/"}
     ar = AnalyzeRule(source=src, base_url="https://www.example.com/")
@@ -76,6 +167,37 @@ def test_analyze_url_uses_jslib():
         source=dict(SOURCE_WITH_JSLIB),
     )
     assert aurl.url.endswith("/s/AB")
+
+
+def test_analyze_url_jslib_without_trailing_semicolon_before_bindings():
+    """RSS media sources often define only ``let host = \"...\"`` in jsLib.
+
+    The namespace binding IIFE injected after jsLib must be a separate
+    statement; otherwise JavaScript parses it as a call on the string value
+    and raises ``TypeError: not a function`` while opening the discover page.
+    """
+    src = {
+        "bookSourceUrl": "short-drama",
+        "sourceUrl": "short-drama",
+        "jsLib": 'let host = "https://media.example.com"',
+    }
+    aurl = AnalyzeUrl(
+        '{{host}}/list?session={{java.timeFormatUTC(Date.now(), "yyyyMMddHHmm", 8)}}',
+        source=src,
+    )
+    assert aurl.url.startswith("https://media.example.com/list?session=")
+    assert aurl.url.removeprefix(
+        "https://media.example.com/list?session="
+    ).isdigit()
+
+
+def test_analyze_url_java_utilities_work_without_jslib():
+    """AnalyzeUrl's delegated bridge must expose all JavaBridge callables."""
+    aurl = AnalyzeUrl(
+        'https://www.example.com/list?date={{java.timeFormatUTC(1700000000000, "yyyyMMdd", 8)}}',
+        source={"bookSourceUrl": "https://www.example.com"},
+    )
+    assert aurl.url == "https://www.example.com/list?date=20231115"
 
 
 def test_search_list_items_use_jslib_fields():

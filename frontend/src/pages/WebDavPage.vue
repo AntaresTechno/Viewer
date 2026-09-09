@@ -10,6 +10,7 @@ import {
   type WebDavPendingItem,
   type WebDavServerInfo,
 } from "@/api/client";
+import { showConfirm } from "@/services/appDialog";
 
 const loading = ref(true);
 const saving = ref(false);
@@ -101,7 +102,10 @@ async function legadoImport() {
     err.value = "请先开启 legado 同步";
     return;
   }
-  if (!confirm("从最新 legado 全量备份 backup*.zip 导入书架与进度？已合并，不删本地。")) return;
+  if (!await showConfirm(
+    "从最新 legado 全量备份 backup*.zip 导入书架与进度？已合并，不删本地。",
+    { title: "导入 Legado 备份", confirmText: "导入" },
+  )) return;
   err.value = "";
   msg.value = "";
   legadoImporting.value = true;
@@ -167,7 +171,10 @@ async function genSecret() {
   err.value = "";
   if (
     server.value?.hasSecret &&
-    !confirm("重新生成后旧密码立即失效，所有已配置的设备需更新密码。继续？")
+    !await showConfirm(
+      "重新生成后旧密码立即失效，所有已配置的设备需更新密码。继续？",
+      { title: "重新生成密码", confirmText: "重新生成", danger: true },
+    )
   ) {
     return;
   }
@@ -285,7 +292,10 @@ async function listBackups() {
 }
 
 async function restore(name: string) {
-  if (!confirm(`从「${name}」恢复？按更新时间合并，不删本地已有条目。`)) return;
+  if (!await showConfirm(
+    `从「${name}」恢复？按更新时间合并，不删本地已有条目。`,
+    { title: "恢复备份", confirmText: "恢复" },
+  )) return;
   err.value = "";
   msg.value = "";
   restoring.value = name;
@@ -302,7 +312,10 @@ async function restore(name: string) {
 }
 
 async function removeBackup(name: string) {
-  if (!confirm(`删除远端备份「${name}」？此操作不可恢复。`)) return;
+  if (!await showConfirm(
+    `删除远端备份「${name}」？此操作不可恢复。`,
+    { title: "删除远端备份", confirmText: "删除", danger: true },
+  )) return;
   try {
     await api.webdavDeleteBackup(name);
     await listBackups();
