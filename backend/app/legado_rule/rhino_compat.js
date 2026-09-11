@@ -304,11 +304,25 @@
         return index >= 0 && index < items.length ? items[index] : null;
       },
       first: function () { return items.length ? items[0] : null; },
+      text: function () {
+        var texts = [];
+        for (var j = 0; j < items.length; j++) {
+          var value = items[j].text();
+          if (value) texts.push(value);
+        }
+        return texts.join(" ");
+      },
+      attr: function (name) {
+        return items.length ? items[0].attr(name) : "";
+      },
       toArray: function () { return items.slice(); }
     };
   }
   _org.jsoup.Jsoup = _org.jsoup.Jsoup || {};
   _org.jsoup.Jsoup.parse = function (markup) { return _jsoupElement(markup); };
+  // 宿主在更新 `result` 等绑定时，用它把 lxml 元素恢复为 Jsoup Element
+  // 外观。名称刻意私有，书源仍只看到标准的 result.select(...) 用法。
+  G.__vJsoupElement = _jsoupElement;
 
   // -------------------------------------------------------- JavaImporter 作用域
   // 每个包对象是可枚举成员容器，importPackage 时把「包下的类/子包」浅拷贝

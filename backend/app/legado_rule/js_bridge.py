@@ -932,6 +932,21 @@ def _safe_json(v: Any) -> Any:
         return _to_jsonable(v)
 
 
+def _binding_expression(value: Any) -> str:
+    """Serialize a host binding while preserving HTML Element behaviour.
+
+    Legado binds Jsoup ``Element`` instances directly, so source rules use
+    ``result.select(...)``.  lxml elements cannot cross the QuickJS boundary;
+    serialize their outer HTML and rebuild the JS-side Jsoup facade instead.
+    """
+    from .analyzer_css import HTML_ELEMENT, _outer_html
+
+    if isinstance(value, HTML_ELEMENT):
+        markup = json.dumps(_outer_html(value), ensure_ascii=False)
+        return f"globalThis.__vJsoupElement({markup})"
+    return json.dumps(_safe_json(value), ensure_ascii=False)
+
+
 def _js_string(value: Any) -> str:
     """Match JavaScript ``String(value)`` for primitive bridge arguments."""
     if value is None:
@@ -1061,7 +1076,7 @@ class JsEvaluator:
             lines.append(
                 # 注入为可配置的全局对象属性而非 `var`：书源脚本顶层 `let url/result`
                 # 才能覆盖而不报 `redeclaration`（番茄 getByTabIndex 即 `let url`）。
-                f"globalThis.{k} = {json.dumps(_safe_json(v), ensure_ascii=False)};"
+                f"globalThis.{k} = {_binding_expression(v)};"
             )
         try:
             ctx.eval("\n".join(lines))
@@ -1074,10 +1089,9 @@ class JsEvaluator:
         """在现有 QuickJS 上下文中更新绑定变量。"""
         if not key.isidentifier():
             return
-        value = _safe_json(value)
         try:
             self._quickjs_ctx.eval(
-                f"globalThis.{key} = {json.dumps(value, ensure_ascii=False)};"
+                f"globalThis.{key} = {_binding_expression(value)};"
             )
         except Exception as exc:  # noqa: BLE001
             raise JsUnavailableError(f"JS 绑定更新失败: {exc}") from exc
