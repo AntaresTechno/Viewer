@@ -158,6 +158,21 @@ class TestLoginUi:
         assert source_state.get_login_info(
             "https://www.example.com/") is None
 
+    def test_dynamic_defaults_do_not_recurse_through_jslib(self, state_file):
+        """Cold sources may read login info while jsLib itself is loading."""
+        src = {
+            "bookSourceUrl": "https://cold.example.com/",
+            "jsLib": "var bootInfo = source.getLoginInfoMap();",
+            "loginUrl": "@js:function login() {}",
+            "loginUi": (
+                "@js:JSON.stringify([{name:'level', type:'select', "
+                "default:'B'}]);"
+            ),
+        }
+
+        assert source_login.get_login_info(src) == {"level": "B"}
+        assert source_state.get_login_info(src["bookSourceUrl"]) is None
+
 
 @pytest.mark.skipif(not _js_available(), reason="需要 QuickJS")
 class TestRunLogin:

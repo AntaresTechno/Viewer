@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 import json
 from typing import Any
 
@@ -20,6 +21,16 @@ from . import source_state
 from .source_bridge import SourceLoginBridge, bridges_for, source_key
 
 _JS_PREFIXES = ("@js:", "<js>")
+
+# Dynamic loginUi is evaluated in a normal source JS context, which loads the
+# source jsLib first.  Some jsLib implementations call getLoginInfoMap() while
+# they are being loaded.  On a fresh install there is no stored login info, so
+# getLoginInfoMap() falls back to default_login_info() and would recursively
+# create the same JS context forever.  Track sources currently resolving their
+# defaults so that the nested lookup can safely observe an empty map.
+_DEFAULT_INFO_STACK: ContextVar[tuple[str, ...]] = ContextVar(
+    "source_login_default_info_stack", default=(),
+)
 
 
 def _strip_js_prefix(text: str) -> str:
@@ -136,7 +147,16 @@ def row_title(row: dict) -> str:
 
 def default_login_info(source: dict, rows: list[dict] | None = None) -> dict[str, str]:
     """无已存登录信息时按 loginUi 取默认值（getLoginInfoMap 兜底语义）。"""
-    rows = rows if rows is not None else login_rows(source)
+    if rows is None:
+        key = source_key(source)
+        stack = _DEFAULT_INFO_STACK.get()
+        if key in stack:
+            return {}
+        token = _DEFAULT_INFO_STACK.set((*stack, key))
+        try:
+            rows = login_rows(source)
+        finally:
+            _DEFAULT_INFO_STACK.reset(token)
     info: dict[str, str] = {}
     for row in rows:
         if row["type"] == "button":
