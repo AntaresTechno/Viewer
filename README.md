@@ -1,4 +1,20 @@
+<p align="center">
+  <img src="1080.png" alt="Viewer" width="360"/>
+</p>
+
+<div align="center">
+
 # Viewer
+
+**一个自托管、可自扩展的网络阅读与媒体源应用**
+
+[![Vue 3](https://img.shields.io/badge/Vue%203-4FC08D?style=flat-square&logo=vue.js&logoColor=white)](https://vuejs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![License MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](#许可证)
+
+</div>
 
 Viewer 是一个面向网络阅读与媒体源的自托管 Web 应用。前端使用 Vue 3，后端使用 FastAPI；书源、订阅、媒体、WebDAV、协议处理和规则引擎通过组件注册表装配。
 
