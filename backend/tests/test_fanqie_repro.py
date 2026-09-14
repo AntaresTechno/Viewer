@@ -469,6 +469,15 @@ def test_fq_guest_fallback_helpers():
     assert "ab & cd ef" in out2
 
 
+def test_rule_network_ignores_process_proxy_environment(monkeypatch):
+    """启动器继承的系统代理不能泄漏给番茄等书源的 httpx 客户端。"""
+    from app.legado_rule import net
+
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+    assert net._base_client_kwargs()["trust_env"] is False
+
+
 def test_fq_replace_cover_origin():
     """"replaceCover 语义：缩略/带签名参数 的封面 -> 无签名原图，避免 `&` 截断 403/400。"""
     from app.legado_rule.source_degradation import fanqie as fq

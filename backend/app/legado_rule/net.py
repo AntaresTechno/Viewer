@@ -35,6 +35,11 @@ def _base_client_kwargs() -> dict:
     return {
         "follow_redirects": True,
         "verify": False,
+        # Launcher 自身的代理只用于下载/更新组件，但后端子进程还会继承
+        # 系统 HTTP(S)_PROXY。若该本地代理随后退出，httpx 默认的
+        # trust_env=True 会让所有书源请求继续撞向失效端口。书源网络层
+        # 与进程环境代理必须隔离，源自身的 proxy 选项另行处理。
+        "trust_env": False,
         "limits": _HTTP_LIMITS,
         "headers": {"User-Agent": settings.default_user_agent},
     }
