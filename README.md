@@ -12,7 +12,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-[![License MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](#许可证)
+[![License GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue?style=flat-square)](#许可证)
 
 </div>
 
