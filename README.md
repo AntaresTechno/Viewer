@@ -32,6 +32,8 @@ Viewer 是一个面向网络阅读与媒体源的自托管 Web 应用。前端�
 
 ## 快速开始
 
+也可以用 [Viewer-Launcher](https://github.com/AntaresTechno/Viewer-Launcher) 一键启动本项目。
+
 Windows 推荐安装 [uv](https://docs.astral.sh/uv/) 和 Node.js 后直接运行：
 
 ```powershell
