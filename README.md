@@ -4,7 +4,7 @@
 
 <div align="center">
 
-# Viewer
+# Antares · Viewer
 
 **一个自托管、可自扩展的网络阅读与媒体源应用**
 
